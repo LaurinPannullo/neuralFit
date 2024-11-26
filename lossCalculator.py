@@ -10,19 +10,21 @@ def smoothness_loss(rho):
     diff = rho[:, 1:] - rho[:, :-1]
     return tf.reduce_sum(tf.square(diff))
     
-def custom_loss( y_pred, y_true,gauss_width):
+def custom_loss( y_pred, y_true,std):
     # Ensure both y_true and y_pred are of type float32
-    gauss_width = tf.cast(gauss_width, dtype=tf.float32)
+    std = tf.cast(std, dtype=tf.float32)
+    std = std/std.numpy()[0]
     y_true = tf.cast(y_true, dtype=tf.float32)
     y_pred = tf.cast(y_pred, dtype=tf.float32)
 
-    chi_squared = tf.square((y_true - y_pred) / gauss_width)
+    chi_squared = tf.square((y_true - y_pred) / std)
     chi_squared = tf.reduce_mean(chi_squared)
    
     return chi_squared  # Chi-squared loss
 
 
-def total_loss(y_pred, y_true=None, gauss_width=None, rho=None, model=None, lambda_s=None, lambda_l2=None):
+def total_loss(y_pred, y_true=None, std=None, rho=None, model=None,
+                lambda_s=None, lambda_l2=None):
 
     # Smoothness loss
     smooth_loss = smoothness_loss(rho)
@@ -31,35 +33,51 @@ def total_loss(y_pred, y_true=None, gauss_width=None, rho=None, model=None, lamb
     l2_loss = l2_regularization(model.trainable_weights)
 
     #main_loss
-    main_loss = custom_loss(y_pred, y_true,gauss_width)
+    main_loss = custom_loss(y_pred, y_true,std)
     
     # Total loss = main loss + smoothness regularizer + L2 regularization
-    print("LOSS CALCULATOR",main_loss,smooth_loss,l2_loss)
-    return main_loss + lambda_s * smooth_loss + (lambda_l2 * l2_loss)*0.5
+    return main_loss + lambda_s * smooth_loss + (lambda_l2 * l2_loss)*0.5,[main_loss,smooth_loss,l2_loss]
 
 
 
 class LossCalculator:
-    def __init__(self, model=None,y_true=None,gauss_width=None,kernel=None,delomega=None,x=None,lambda_s_func=None,lambda_l2_func=None):
+    def __init__(self, model=None,y_true=None,std=None,kernel=None,
+                 delomega=None,x=None,lambda_s_func=None,lambda_s_func_warmup=None,lambda_l2_func=None,lambda_l2_func_warmup=None):
         self.model = model
         self.y_true = y_true
         self.x=x
-        self.gauss_width = gauss_width
+        self.std = std
 
-        if self.gauss_width is None:
-            self.gauss_width = tf.constant(1.0, dtype=tf.float32)
+        if self.std is None:
+            self.std = tf.constant(1.0, dtype=tf.float32)
         else:
-            self.gauss_width = tf.cast(self.gauss_width, dtype=tf.float32)
+            self.std = tf.cast(self.std, dtype=tf.float32)
         self.kernel = kernel
         self.delomega = delomega
         self.lambda_s_func = lambda_s_func
         self.lambda_l2_func = lambda_l2_func
+        if lambda_s_func_warmup is None:
+            self.lambda_s_func_warmup = lambda_s_func
+        else:
+            self.lambda_s_func_warmup = lambda_s_func_warmup
 
-    def get_lambda_s(self,epoch):
-        return self.lambda_s_func(epoch)
+        if lambda_l2_func_warmup is None:
+            self.lambda_l2_func_warmup = lambda_l2_func
+        else:
+            self.lambda_l2_func_warmup = lambda_l2_func_warmup 
+
+
+    def get_lambda_s(self,epoch,warmup=False):
+        if warmup:
+            return self.lambda_s_func_warmup(epoch)
+        else:
+            return self.lambda_s_func(epoch)
     
-    def get_lambda_l2(self,epoch):
-        return self.lambda_l2_func(epoch)
+    def get_lambda_l2(self,epoch,warmup=False):
+        if warmup:
+            return self.lambda_l2_func_warmup(epoch)
+        else:
+            return self.lambda_l2_func(epoch)
     
     def l2_regularization(self):
         return self.l2_regularization(self.model.trainable_weights)
@@ -72,7 +90,7 @@ class LossCalculator:
     def custom_loss(self, y_pred,y_true=None):
         if y_true is None:
             y_true = self.y_true
-        return custom_loss(y_pred,self.y_true,self.gauss_width)
+        return custom_loss(y_pred,self.y_true,self.std)
 
     def total_loss(self,epoch,y_pred=None,rho=None,y_true=None):
         if rho is None:
@@ -82,7 +100,9 @@ class LossCalculator:
         if y_true is None:
             y_true = self.y_true
 
-        return total_loss(y_pred,y_true=y_true,gauss_width=self.gauss_width,rho=rho, model=self.model, lambda_s=self.get_lambda_s(epoch), lambda_l2=self.get_lambda_l2(epoch))
+        return total_loss(y_pred,y_true=y_true,std=self.std,
+                           rho=rho, model=self.model, lambda_s=self.get_lambda_s(epoch),
+                             lambda_l2=self.get_lambda_l2(epoch))
     
 
     
