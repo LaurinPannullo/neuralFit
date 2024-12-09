@@ -38,8 +38,11 @@ def Di(KL, rhoi, delomega):
     dis = dis * delomega  # Multiply by delomega
     return dis
 
-def generateNoisyCorrelator(correlator, x, noise_width):
+def generateNoisyCorrelator(correlator, x, noise_width,abs=False,seed=None):
     del_xi= x[1]-x[0] #spacing between x values
     custom_std = noise_width*(correlator*(x+1e-1))/del_xi  #gaussian width
-    noisy_Dpi = correlator + np.random.normal(0,custom_std) #random instance of errors
+    rng = np.random.RandomState(seed)
+    noisy_Dpi = correlator + rng.normal(0,custom_std) #random instance of errors
+    if abs:
+        noisy_Dpi = tf.abs(noisy_Dpi) #random instance of errors
     return noisy_Dpi,custom_std
