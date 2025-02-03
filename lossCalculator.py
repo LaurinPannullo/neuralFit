@@ -9,6 +9,9 @@ def l2_regularization( weights):
 def smoothness_loss(rho):
     diff = rho[:, 1:] - rho[:, :-1]
     return tf.reduce_sum(tf.square(diff))
+
+def rho_zero(rho):
+    return rho[0].numpy()[0]
     
 def custom_loss( y_pred, y_true,std):
     # Ensure both y_true and y_pred are of type float32
@@ -24,13 +27,16 @@ def custom_loss( y_pred, y_true,std):
 
 
 def total_loss(y_pred, y_true=None, std=None, rho=None, model=None,
-                lambda_s=None, lambda_l2=None):
+                lambda_s=None, lambda_l2=None, lambda_rho_zero=None):
 
     # Smoothness loss
     smooth_loss = smoothness_loss(rho)
     
     # L2 loss (regularization on the network weights)
     l2_loss = l2_regularization(model.trainable_weights)
+
+    # rho_zero loss
+    #rho_zero_loss = rho_zero(rho)
 
     #main_loss
     main_loss = custom_loss(y_pred, y_true,std)
@@ -42,7 +48,14 @@ def total_loss(y_pred, y_true=None, std=None, rho=None, model=None,
 
 class LossCalculator:
     def __init__(self, model=None,y_true=None,std=None,kernel=None,
-                 delomega=None,x=None,lambda_s_func=None,lambda_s_func_warmup=None,lambda_l2_func=None,lambda_l2_func_warmup=None):
+                 delomega=None,
+                 x=None,
+                 lambda_s_func=lambda x:0.0,
+                 lambda_s_func_warmup=None,
+                 lambda_l2_func=lambda x:0.0,
+                 lambda_l2_func_warmup=None,
+                 lambda_rho_zero_func=lambda x:0.0,
+                 lambda_rho_zero_func_warmup=None):
         self.model = model
         self.y_true = y_true
         self.x=x
@@ -56,15 +69,20 @@ class LossCalculator:
         self.delomega = delomega
         self.lambda_s_func = lambda_s_func
         self.lambda_l2_func = lambda_l2_func
+        self.lambda_rho_zero_func = lambda_rho_zero_func
         if lambda_s_func_warmup is None:
             self.lambda_s_func_warmup = lambda_s_func
         else:
             self.lambda_s_func_warmup = lambda_s_func_warmup
-
         if lambda_l2_func_warmup is None:
             self.lambda_l2_func_warmup = lambda_l2_func
         else:
             self.lambda_l2_func_warmup = lambda_l2_func_warmup 
+        
+        if lambda_rho_zero_func_warmup is None:
+            self.lambda_rho_zero_func_warmup = lambda_s_func
+        else:
+            self.lambda_rho_zero_func_warmup = lambda_rho_zero_func_warmup
 
 
     def get_lambda_s(self,epoch,warmup=False):
@@ -78,6 +96,17 @@ class LossCalculator:
             return self.lambda_l2_func_warmup(epoch)
         else:
             return self.lambda_l2_func(epoch)
+    
+    def get_lambda_rho_zero(self,epoch,warmup=False):
+        if warmup:
+            return self.lambda_rho_zero_func_warmup(epoch)
+        else:
+            return self.lambda_rho_zero_func(epoch)
+        
+    def rho_zero(self,rho=None):
+        if rho is None:
+            rho=self.model(self.x)
+        return rho_zero(rho)
     
     def l2_regularization(self):
         return self.l2_regularization(self.model.trainable_weights)
@@ -102,7 +131,68 @@ class LossCalculator:
 
         return total_loss(y_pred,y_true=y_true,std=self.std,
                            rho=rho, model=self.model, lambda_s=self.get_lambda_s(epoch),
+                             lambda_l2=self.get_lambda_l2(epoch),lambda_rho_zero=self.get_lambda_rho_zero(epoch))
+    
+
+class LossCalculatorHyperTuning:
+    def __init__(self, 
+                 model,
+                 y_true,
+                 std,
+                 kernel,
+                 delomega,
+                 x,
+                 lambda_s_func,
+                 lambda_s_func_warmup,
+                 lambda_l2_func,
+                 lambda_l2_func_warmup=None):
+        self.model = model
+        self.y_true = y_true
+        self.x=x
+        self.std = std
+
+        if self.std is None:
+            self.std = tf.constant(1.0, dtype=tf.float32)
+        else:
+            self.std = tf.cast(self.std, dtype=tf.float32)
+        self.kernel = kernel
+        self.delomega = delomega
+        self.lambda_s_func = lambda_s_func
+        self.lambda_l2_func = lambda_l2_func
+        self.lambda_s_func_warmup = lambda_s_func_warmup
+        self.lambda_l2_func_warmup = lambda_l2_func_warmup 
+
+
+    def get_lambda_s(self,epoch,warmup=False):
+        if warmup:
+            return self.lambda_s_func_warmup(epoch)
+        else:
+            return self.lambda_s_func(epoch)
+    
+    def get_lambda_l2(self,epoch,warmup=False):
+        if warmup:
+            return self.lambda_l2_func_warmup(epoch)
+        else:
+            return self.lambda_l2_func(epoch)
+    
+
+    def l2_regularization(self):
+        return self.l2_regularization(self.model.trainable_weights)
+    
+    def smoothness_loss(self,rho):
+        return smoothness_loss(rho)
+    
+    def custom_loss(self, y_pred):
+        return custom_loss(y_pred,self.y_true,self.std)
+
+    def total_loss(self,epoch):
+        rho=self.model(self.x)
+        y_pred = correlator.Di(self.kernel, rho, self.delomega)
+        y_true = self.y_true
+
+        return total_loss(y_pred,y_true=y_true,std=self.std,
+                           rho=rho, model=self.model, lambda_s=self.get_lambda_s(epoch),
                              lambda_l2=self.get_lambda_l2(epoch))
     
 
-    
+        

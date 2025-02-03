@@ -16,7 +16,7 @@ def KL_kernel_Position_Vacuum(Position, Omega):
 
 def KL_kernel_Position_FiniteT(Position, Omega,T):
     Position = Position[:, np.newaxis]  # Reshape Position as column to allow broadcasting
-    ker = np.cosh(Omega * (1/2 - Position)/T) / np.sinh(Omega/2/T)
+    ker = np.cosh(Omega * (Position-1/(2*T))) / np.sinh(Omega/2/T)
     return ker
 
 def KL_kernel_Omega(KL,x,Omega,args=[]):
@@ -38,8 +38,23 @@ def Di(KL, rhoi, delomega):
     dis = dis * delomega  # Multiply by delomega
     return dis
 
-def generateNoisyCorrelator(correlator, x, noise_width):
+def generateNoisyCorrelator(correlator, x, noise_width,abs=False,seed=None):
     del_xi= x[1]-x[0] #spacing between x values
     custom_std = noise_width*(correlator*(x+1e-1))/del_xi  #gaussian width
-    noisy_Dpi = correlator + np.random.normal(0,custom_std) #random instance of errors
+    rng = np.random.RandomState(seed)
+    noisy_Dpi = correlator + rng.normal(0,custom_std) #random instance of errors
+    if abs:
+        noisy_Dpi = tf.abs(noisy_Dpi) #random instance of errors
     return noisy_Dpi,custom_std
+
+def generateNoisyCorrelatorEnsemble(true_correlator,x,sample_noise,samples,mean_noise=None, seed=1):
+    noisy_Dxi_ensemble = []
+    base_noisy_Dxi = true_correlator
+    if mean_noise is not None:
+        base_noisy_Dxi,_=generateNoisyCorrelator(true_correlator,x,mean_noise,seed=seed)
+    for ii in range(samples):
+                noisy_Dxi_sample,custom_std=generateNoisyCorrelator(base_noisy_Dxi,x,sample_noise,seed=seed+1+ii)
+                noisy_Dxi_ensemble.append(noisy_Dxi_sample)
+
+    noisy_Dxi_ensemble = np.array(noisy_Dxi_ensemble)
+    return noisy_Dxi_ensemble, base_noisy_Dxi, custom_std
