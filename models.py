@@ -58,7 +58,7 @@ class networkTrainer:
         self.optimizer = optimizer
         self.loss_calculator = loss_calculator
     
-    def train_step(self, epoch,warmup=False):
+    def train_step(self, epoch):
         with tf.GradientTape() as tape:
             total_loss_value,individual_losses = self.loss_calculator.total_loss(epoch)
 
@@ -68,7 +68,7 @@ class networkTrainer:
     
         return total_loss_value,individual_losses
     
-    def train(self, num_epochs,warmup=False,verbose=False,start_epoch=0):
+    def train(self, num_epochs,verbose=False,start_epoch=0):
         losses = []
         individual_losses_history = []
         net_num_epochs = num_epochs-start_epoch
@@ -76,12 +76,12 @@ class networkTrainer:
             print(f'Training for {net_num_epochs} epochs')
             start_time = time.time()
         for epoch in range(start_epoch,start_epoch+num_epochs):
-            total_loss_value,individual_losses = self.train_step(epoch,warmup=warmup)
+            total_loss_value,individual_losses = self.train_step(epoch)
             losses.append(total_loss_value)
             individual_losses_history.append(individual_losses)
-            if verbose and epoch % (net_num_epochs//10) == 0:
+            if verbose and net_num_epochs>10 and epoch % (net_num_epochs//10) == 0:
                 print(f'Epoch {epoch}, Loss: {total_loss_value}')
         if verbose:
             end_time = time.time()
-            print(f'Training took {end_time-start_time} seconds')
+            print(f'Training took {end_time-start_time:.2f} seconds')
         return losses,individual_losses_history

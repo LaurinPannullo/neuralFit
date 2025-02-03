@@ -16,12 +16,20 @@ def KL_kernel_Position_Vacuum(Position, Omega):
 
 def KL_kernel_Position_FiniteT(Position, Omega,T):
     Position = Position[:, np.newaxis]  # Reshape Position as column to allow broadcasting
-    ker = np.cosh(Omega * (Position-1/(2*T))) / np.sinh(Omega/2/T)
+    with np.errstate(divide='ignore'):
+        ker = np.cosh(Omega * (Position-1/(2*T))) / np.sinh(Omega/2/T)
     return ker
 
 def KL_kernel_Omega(KL,x,Omega,args=[]):
-    return Omega * KL(x, Omega, *args)
-
+    ret=KL(x, Omega, *args)
+    ret[:,Omega==0]=1
+    ret=Omega * ret
+    # set for all Omega=0 to 1
+    if len(args)==0:
+        ret[:,Omega==0]=0
+    else:
+        ret[:,Omega==0]=2*args[0]
+    return ret
 def Di(KL, rhoi, delomega):
     # Ensure both tensors are of the same data type (float32)
     KL = tf.cast(KL, dtype=tf.float32)  # Cast KL to float32

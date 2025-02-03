@@ -51,11 +51,8 @@ class LossCalculator:
                  delomega=None,
                  x=None,
                  lambda_s_func=lambda x:0.0,
-                 lambda_s_func_warmup=None,
                  lambda_l2_func=lambda x:0.0,
-                 lambda_l2_func_warmup=None,
-                 lambda_rho_zero_func=lambda x:0.0,
-                 lambda_rho_zero_func_warmup=None):
+                 lambda_rho_zero_func=lambda x:0.0,):
         self.model = model
         self.y_true = y_true
         self.x=x
@@ -70,38 +67,16 @@ class LossCalculator:
         self.lambda_s_func = lambda_s_func
         self.lambda_l2_func = lambda_l2_func
         self.lambda_rho_zero_func = lambda_rho_zero_func
-        if lambda_s_func_warmup is None:
-            self.lambda_s_func_warmup = lambda_s_func
-        else:
-            self.lambda_s_func_warmup = lambda_s_func_warmup
-        if lambda_l2_func_warmup is None:
-            self.lambda_l2_func_warmup = lambda_l2_func
-        else:
-            self.lambda_l2_func_warmup = lambda_l2_func_warmup 
-        
-        if lambda_rho_zero_func_warmup is None:
-            self.lambda_rho_zero_func_warmup = lambda_s_func
-        else:
-            self.lambda_rho_zero_func_warmup = lambda_rho_zero_func_warmup
 
 
-    def get_lambda_s(self,epoch,warmup=False):
-        if warmup:
-            return self.lambda_s_func_warmup(epoch)
-        else:
-            return self.lambda_s_func(epoch)
+    def get_lambda_s(self,epoch):
+        return self.lambda_s_func(epoch)
     
-    def get_lambda_l2(self,epoch,warmup=False):
-        if warmup:
-            return self.lambda_l2_func_warmup(epoch)
-        else:
-            return self.lambda_l2_func(epoch)
+    def get_lambda_l2(self,epoch):
+        return self.lambda_l2_func(epoch)
     
-    def get_lambda_rho_zero(self,epoch,warmup=False):
-        if warmup:
-            return self.lambda_rho_zero_func_warmup(epoch)
-        else:
-            return self.lambda_rho_zero_func(epoch)
+    def get_lambda_rho_zero(self,epoch):
+        return self.lambda_rho_zero_func(epoch)
         
     def rho_zero(self,rho=None):
         if rho is None:

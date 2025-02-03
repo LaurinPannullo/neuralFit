@@ -11,6 +11,8 @@ import numpy as np
 from typing import List
 import json
 import argparse
+import time
+import pprint
 
 @dataclass
 class networkParameters:
@@ -69,27 +71,30 @@ class neuralFit:
                                             delomega=del_omega,
                                             x=constant_input,
                                             std=errorWeight,
-                                            lambda_s_func_warmup=lambda x:self.lambda_s[0],
-                                            lambda_s_func=lambda x:self.lambda_s[1],
-                                            lambda_l2_func_warmup=lambda x:self.lambda_l2[0],
-                                            lambda_l2_func=lambda x:self.lambda_l2[1]
+                                            lambda_s_func=lambda x:self.lambda_s[0],
+                                            lambda_l2_func=lambda x:self.lambda_l2[0]
                                             )
 
         optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate[0])
         trainer=models.networkTrainer(model,optimizer,lossCalc)
-        total_loss_history,loss_history=trainer.train(self.epochs[0],warmup=True,verbose=verbose)
+        # total_loss_history,loss_history=trainer.train(self.epochs[0],warmup=True,verbose=verbose)
+        total_loss_history=[]
+        loss_history=[]
 
-        for lambda_s,lambda_l2,learning_rate,epochs in zip(self.lambda_s[1:],self.lambda_l2[1:],self.learning_rate[1:],self.epochs[1:]):
+        for lambda_s,lambda_l2,learning_rate,epochs in zip(self.lambda_s,self.lambda_l2,self.learning_rate,self.epochs):
             optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate)
             lossCalc.lambda_s_func=lambda x:lambda_s
             lossCalc.lambda_l2_func=lambda x:lambda_l2
             trainer.optimizer=optimizer
-            total_loss_history_tmp,loss_history_tmp=trainer.train(epochs,warmup=False,verbose=verbose)
+            total_loss_history_tmp,loss_history_tmp=trainer.train(epochs,verbose=verbose)
             total_loss_history.extend(total_loss_history_tmp)
             loss_history.extend(loss_history_tmp)
+            if verbose:
+                print("-"*40)
+
 
         spectralFunction=model(constant_input)
-        return spectralFunction
+        return np.squeeze(spectralFunction)
    
 class ParameterHandler:
     def __init__(self, paramsDefaultDict):
@@ -174,6 +179,8 @@ class FitRunner:
         )
 
         self.Nt=len(self.x)
+
+        self.verbose = self.parameterHandler.get_verbose()
     
     def extractColumns(self, file, x_col, mean_col, error_col, correlator_cols):
         data = np.loadtxt(file)
@@ -189,7 +196,13 @@ class FitRunner:
 
         if self.correlators.ndim == 1:
             self.correlators = [self.correlators]
-        for corr in self.correlators:
+        else:
+            self.correlators = self.correlators.T
+        for i,corr in enumerate(self.correlators):
+            start_time = time.time()
+            print("="*40)
+            print(f"Fitting correlator {i+1}/{len(self.correlators)}")
+            print("="*40)
             sf = fitter.fitCorrelator(
                 self.x,
                 self.error,
@@ -197,10 +210,13 @@ class FitRunner:
                 self.Nt,
                 self.omega,
                 which=which,
-                verbose=self.parameterHandler.get_verbose()
-            )
-            results.append(sf.numpy())
-        return results
+                verbose=self.verbose
+            )                 
+            if self.verbose:
+                print("-"*40)
+                print(f"Training time: {time.time()-start_time:.2f} seconds")
+            results.append(sf)
+        return np.array(results)
     
     def calculate_mean_error(self, results):
         N=len(results)
@@ -212,7 +228,7 @@ class FitRunner:
         header ="# Omega "+which+"_mean "+which+"_error"
         for i in range(len(results)):
             header += f" {which}_sample_{i}"
-        writeData = np.column_stack((self.omega,mean,error,results))
+        writeData = np.column_stack((self.omega,mean,error,results.T))
         np.savetxt(outputFile, writeData, header=header)
 
 def initializeArgumentParser(paramsDefaultDict):
@@ -240,8 +256,8 @@ def initializeArgumentParser(paramsDefaultDict):
             f"--{name}",
             type=typeArg,
             nargs=nargsArg,
-            default=default,
-            help=f"Value for parameter '{name}' of type {typeString} with default {default}"
+            # default=default,
+            help=f"Value for parameter '{name}' of type {typeString}"
         )
     return parser
 
@@ -251,6 +267,11 @@ def main(paramsDefaultDict):
 
     parameterHandler = ParameterHandler(paramsDefaultDict)
     parameterHandler.load_params(args.config,args)
+
+    if parameterHandler.get_verbose():
+        print("*"*40)
+        print("Running fits with the following parameters:")
+        pprint.pprint(parameterHandler.get_params())
 
     fitRunner = FitRunner(parameterHandler)
     results = fitRunner.run_fits()
