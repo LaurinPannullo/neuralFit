@@ -50,7 +50,7 @@ class neuralFit:
             raise ValueError("Invalid choice spectral function target")
         return kernel
 
-    def fitCorrelator(self,x,error,correlator,Nt,omega,which="RhoOverOmega",verbose=True):
+    def fitCorrelator(self,x,error,correlator,Nt,omega,which="RhoOverOmega",network="SpectralNN",verbose=True):
 
         kernel=self.initKernel(which,Nt,x,omega)
         del_omega=omega[1]-omega[0]
@@ -63,7 +63,12 @@ class neuralFit:
 
         constant_input = tf.constant([[1.0]], dtype=tf.float32) #NN
 
-        model = models.SpectralNN(num_output_nodes=len(omega), width=self.width, depth=self.depth)
+        if network == "SpectralNN":
+            model = models.SpectralNN(num_output_nodes=len(omega), width=self.width, depth=self.depth)
+        elif network == "SpectralNNP2P":
+            model = models.SpectralNNP2P(num_output_nodes=len(omega), width=self.width, depth=self.depth, lambda_s=self.lambda_s[0], lambda_l2=self.lambda_l2[0], kl_ker=kernel, del_omega=del_omega, gauss_width=errorWeight)
+        else:
+            raise ValueError("Invalid choice of network")
         target_output=correlator
         lossCalc=lossCalculator.LossCalculator(model=model,
                                             y_true=target_output,
@@ -184,6 +189,7 @@ class FitRunner:
         self.verbose = self.parameterHandler.get_verbose()
 
         self.multiFit = self.parameterHandler.get_params()["multiFit"]
+        self.multiFitBootstrap_samples = self.parameterHandler.get_params()["multiFitBootstrap_samples"]
 
         self.which = self.parameterHandler.get_which()
 
@@ -202,28 +208,54 @@ class FitRunner:
         results = []
 
         if self.correlators.ndim == 1:
-            self.correlators = [self.correlators]
+            self.correlators = np.array([self.correlators])
         else:
             self.correlators = self.correlators.T
         
+
+
+        n_correlators = self.correlators.shape[0]
+        
         if self.multiFit:
-            start_time = time.time()
-            print("="*40)
-            print(f"Multifitting {len(self.correlators)} correlators")
-            print("="*40)
-            sf = fitter.fitCorrelator(
-                self.x,
-                self.error,
-                self.correlators,
-                self.Nt,
-                self.omega,
-                which=self.which,
-                verbose=self.verbose
-            )                 
-            if self.verbose:
+            if self.multiFitBootstrap_samples == 0:
+                start_time = time.time()
                 print("="*40)
-                print(f"Training time: {time.time()-start_time:.2f} seconds")
-            results.append(sf)
+                print(f"Multifitting {len(self.correlators)} correlators")
+                print("="*40)
+                sf = fitter.fitCorrelator(
+                    self.x,
+                    self.error,
+                    self.correlators,
+                    self.Nt,
+                    self.omega,
+                    which=self.which,
+                    verbose=self.verbose
+                )                 
+                if self.verbose:
+                    print("="*40)
+                    print(f"Training time: {time.time()-start_time:.2f} seconds")
+                results.append(sf)
+            else:
+                for i in range(self.multiFitBootstrap_samples):
+                    #pick n_correlators random correlators from self.correlators 
+                    random_correlators = self.correlators[np.random.choice(n_correlators, n_correlators, replace=True)]
+                    start_time = time.time()
+                    print("="*40)
+                    print(f"Multifitting {len(self.correlators)} correlators with bootstrap sample {i+1}/{self.multiFitBootstrap_samples}")
+                    print("="*40)
+                    sf = fitter.fitCorrelator(
+                        self.x,
+                        self.error,
+                        random_correlators,
+                        self.Nt,
+                        self.omega,
+                        which=self.which,
+                        verbose=self.verbose
+                    )                 
+                    if self.verbose:
+                        print("="*40)
+                        print(f"Training time: {time.time()-start_time:.2f} seconds")
+                    results.append(sf)
         else:
             for i,corr in enumerate(self.correlators):
                 start_time = time.time()
@@ -281,10 +313,10 @@ def initializeArgumentParser(paramsDefaultDict):
             nargsArg=1
         parser.add_argument(
             f"--{name}",
-            type=typeArg,
+            # type=typeArg,
             nargs=nargsArg,
             # default=default,
-            help=f"Value for parameter '{name}' of type {typeString}"
+            help=f"Value for parameter '{name}'"
         )
     return parser
 
@@ -316,12 +348,15 @@ paramsDefaultDict = {
     "width": 32,
     "depth": 3,
     "errorWeighting": True,
+    "network": "SpectralNN",
     #Correlator/Rho params
     "omega_min": 0,
     "omega_max": 10,
     "omega_points": 500,
     "which": "RhoOverOmega",
     "multiFit": False,
+    "multiFitBootstrap_samples": 0,
+    "seed": 1,
     "correlatorFile": None,
     "xCol": 0,
     "meanCol": 1,
@@ -334,11 +369,12 @@ paramsDefaultDict = {
 
 
 #TODOs
-# - Multifit bootstrap
+# ---------- Multifit bootstrap
 # - implement change of network architecture
 # - implement not only error weighting but correlator mean value weighting
 # - check parameter handling and checking
 # - implement error handling
+# - merge verything into one file
 # - make documentation
 if __name__ == "__main__":
     main(paramsDefaultDict)
