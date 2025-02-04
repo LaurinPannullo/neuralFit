@@ -1,10 +1,5 @@
-
-
-
-import models
-import lossCalculator
-import correlator
 import tensorflow as tf
+import keras
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -13,6 +8,234 @@ import json
 import argparse
 import time
 import pprint
+
+
+# correlator classes and functions
+# partially former content of correlator.py
+
+
+def KL_kernel_Momentum(Momentum, Omega):
+    Momentum = Momentum[:, np.newaxis]  # Reshape Momentum as column to allow broadcasting
+    ker = Omega / (Omega**2 + Momentum**2)  # Element-wise division
+    return ker / np.pi 
+
+def KL_kernel_Position_Vacuum(Position, Omega):
+    Position = Position[:, np.newaxis]  # Reshape Position as column to allow broadcasting
+    ker = np.exp(-Omega * np.abs(Position))
+    return ker
+
+def KL_kernel_Position_FiniteT(Position, Omega,T):
+    Position = Position[:, np.newaxis]  # Reshape Position as column to allow broadcasting
+    with np.errstate(divide='ignore'):
+        ker = np.cosh(Omega * (Position-1/(2*T))) / np.sinh(Omega/2/T)
+
+        # set all entries in ker to 1 where Position is modulo 1/T and the entry is nan, because of numerical instability for large Omega
+        ker[np.isnan(ker) & (Position % (1/T) == 0)] = 1
+        #set all other nan entries to 0
+        ker[np.isnan(ker)] = 0
+
+        # ker[(Position%1/T==0)]=1
+        # ker[(Position[:,0]!=0)]=0
+    return ker
+
+def KL_kernel_Omega(KL,x,Omega,args=[]):
+    ret=KL(x, Omega, *args)
+    ret[:,Omega==0]=1
+    ret=Omega * ret
+    # set for all Omega=0 to 1
+    if len(args)==0:
+        ret[:,Omega==0]=0
+    else:
+        ret[:,Omega==0]=2*args[0]
+    return ret
+def Di(KL, rhoi, delomega):
+    # Ensure both tensors are of the same data type (float32)
+    KL = tf.cast(KL, dtype=tf.float32)  # Cast KL to float32
+    rhoi = tf.cast(rhoi, dtype=tf.float32)  # Cast rhoi to float32
+    delomega = tf.cast(delomega, dtype=tf.float32)  # Cast delomega to float32
+    
+    # Ensure rhoi has the correct shape [500,1] for matrix multiplication
+    rhoi = tf.reshape(rhoi, [-1, 1])  # Reshape to [500, 1]
+
+    # Perform matrix multiplication
+    dis = tf.matmul(KL, rhoi)  # Shape will be [25, 1]
+    dis = tf.squeeze(dis, axis=-1)  # Remove the singleton dimension to get [25]
+    
+    dis = dis * delomega  # Multiply by delomega
+    return dis
+
+
+
+# neural network classes
+# former content of models.py
+
+class SpectralNN(tf.keras.Model):
+    def __init__(self, num_output_nodes, width=64, depth=3):
+        super(SpectralNN, self).__init__()
+        
+        # Create hidden layers
+        self.hidden_layers = []
+        for _ in range(depth):
+            self.hidden_layers.append(tf.keras.layers.Dense(width, activation='elu', use_bias=False))
+        
+        # Output layer (softplus activation to ensure positive definiteness)
+        self.output_layer = tf.keras.layers.Dense(num_output_nodes, activation=tf.keras.activations.softplus, use_bias=False)  # Shape [500]
+    
+    def call(self, inputs):
+        # Forward pass through hidden layers
+        x = inputs
+        for layer in self.hidden_layers:
+            x = layer(x)
+        
+        # Output layer (representing rho(omega))
+        output = self.output_layer(x)  # Shape [500]
+        return output
+
+class SpectralNNP2P(tf.keras.Model):
+    def __init__(self, num_output_nodes, width=64, depth=3):
+        super(SpectralNNP2P, self).__init__()
+
+        # Create hidden layers
+        self.hidden_layers = []
+        for _ in range(depth):
+            self.hidden_layers.append(tf.keras.layers.Dense(width, activation='elu'))
+        
+        # Output layer that produces one output per frequency (500 outputs)
+        self.output_layer = tf.keras.layers.Dense(1, activation='softplus')
+    
+    def call(self, inputs):
+        x = inputs
+        for layer in self.hidden_layers:
+            x = layer(x)
+        return self.output_layer(x)
+    
+class networkTrainer:
+    def __init__(self, model, optimizer, loss_calculator):
+        self.model = model
+        self.optimizer = optimizer
+        self.loss_calculator = loss_calculator
+    
+    def train_step(self, epoch):
+        with tf.GradientTape() as tape:
+            total_loss_value,individual_losses = self.loss_calculator.total_loss(epoch)
+
+        # Compute gradients and update weights
+        gradients = tape.gradient(total_loss_value, self.model.trainable_weights)
+        self.optimizer.apply_gradients(zip(gradients, self.model.trainable_weights))
+    
+        return total_loss_value,individual_losses
+    
+    def train(self, num_epochs,verbose=False,start_epoch=0):
+        losses = []
+        individual_losses_history = []
+        net_num_epochs = num_epochs-start_epoch
+        if verbose:
+            print(f'Training for {net_num_epochs} epochs')
+            start_time = time.time()
+        for epoch in range(start_epoch,start_epoch+num_epochs):
+            total_loss_value,individual_losses = self.train_step(epoch)
+            losses.append(total_loss_value)
+            individual_losses_history.append(individual_losses)
+            if verbose and net_num_epochs>10 and epoch % (net_num_epochs//10) == 0:
+                print(f'Epoch {epoch}, Loss: {total_loss_value}')
+        if verbose:
+            end_time = time.time()
+            print(f'Training took {end_time-start_time:.2f} seconds')
+        return losses,individual_losses_history
+
+# loss calculator classes and functions
+# partially former content of lossCalculator.py
+
+def l2_regularization( weights):
+    return tf.reduce_sum([tf.reduce_sum(tf.square(w)) for w in weights])
+
+def smoothness_loss(rho):
+    diff = rho[:, 1:] - rho[:, :-1]
+    return tf.reduce_sum(tf.square(diff))
+    
+def custom_loss( y_pred, y_true,std):
+    # Ensure both y_true and y_pred are of type float32
+    std = tf.cast(std, dtype=tf.float32)
+    std = std/std.numpy()[0]
+    y_true = tf.cast(y_true, dtype=tf.float32)
+    y_pred = tf.cast(y_pred, dtype=tf.float32)
+
+    chi_squared = tf.square((y_true - y_pred) / std)
+    chi_squared = tf.reduce_mean(chi_squared)
+   
+    return chi_squared  # Chi-squared loss
+
+def total_loss(y_pred, y_true=None, std=None, rho=None, model=None,
+                lambda_s=None, lambda_l2=None):
+
+    # Smoothness loss
+    smooth_loss = smoothness_loss(rho)
+    
+    # L2 loss (regularization on the network weights)
+    l2_loss = l2_regularization(model.trainable_weights)
+
+
+    #main_loss
+    main_loss = custom_loss(y_pred, y_true,std)
+    
+    # Total loss = main loss + smoothness regularizer + L2 regularization
+    return main_loss + lambda_s * smooth_loss + (lambda_l2 * l2_loss)*0.5,[main_loss,smooth_loss,l2_loss]
+
+class LossCalculator:
+    def __init__(self, model=None,y_true=None,std=None,kernel=None,
+                 delomega=None,
+                 x=None,
+                 lambda_s_func=lambda x:0.0,
+                 lambda_l2_func=lambda x:0.0,):
+        self.model = model
+        self.y_true = y_true
+        self.x=x
+        self.std = std
+
+        if self.std is None:
+            self.std = tf.constant(1.0, dtype=tf.float32)
+        else:
+            self.std = tf.cast(self.std, dtype=tf.float32)
+        self.kernel = kernel
+        self.delomega = delomega
+        self.lambda_s_func = lambda_s_func
+        self.lambda_l2_func = lambda_l2_func
+
+
+    def get_lambda_s(self,epoch):
+        return self.lambda_s_func(epoch)
+    
+    def get_lambda_l2(self,epoch):
+        return self.lambda_l2_func(epoch)
+            
+    
+    def l2_regularization(self):
+        return self.l2_regularization(self.model.trainable_weights)
+    
+    def smoothness_loss(self,rho=None):
+        if rho is None:
+            rho=self.model(self.x)
+        return smoothness_loss(rho)
+    
+    def custom_loss(self, y_pred,y_true=None):
+        if y_true is None:
+            y_true = self.y_true
+        return custom_loss(y_pred,self.y_true,self.std)
+
+    def total_loss(self,epoch,y_pred=None,rho=None,y_true=None):
+        if rho is None:
+            rho=self.model(self.x)
+        if y_pred is None:
+            y_pred = Di(self.kernel, rho, self.delomega)
+        if y_true is None:
+            y_true = self.y_true
+
+        return total_loss(y_pred,y_true=y_true,std=self.std,
+                           rho=rho, model=self.model, lambda_s=self.get_lambda_s(epoch),
+                             lambda_l2=self.get_lambda_l2(epoch))
+    
+
+# Interface and runner classes
 
 @dataclass
 class networkParameters:
@@ -23,7 +246,6 @@ class networkParameters:
     width: int = 0
     depth: int = 0
     errorWeighting: bool = False
-   
    
 
 class neuralFit:
@@ -37,24 +259,24 @@ class neuralFit:
         self.errorWeighting=networkParameters.errorWeighting
 
 
-    def initKernel(self,which:str,Nt:int,x:np.ndarray,omega:np.ndarray):
-        if which=="RhoOverOmega" and Nt>0:
-            kernel=correlator.KL_kernel_Omega(correlator.KL_kernel_Position_FiniteT,x,omega,args=(1/Nt,))
-        elif which=="RhoOverOmega" and Nt==0:
-            kernel=correlator.KL_kernel_Omega(correlator.KL_kernel_Position_Vacuum,x,omega)
-        elif which=="Rho" and Nt>0:
-            kernel=correlator.KL_kernel_Position_FiniteT(x,omega,1/Nt)
-        elif which=="Rho" and Nt==0:
-            kernel=correlator.KL_kernel_Position_Vacuum(x,omega)
+    def initKernel(self,which:str,finiteT_kernel:bool,Nt:int,x:np.ndarray,omega:np.ndarray):
+        if which=="RhoOverOmega" and finiteT_kernel:
+            kernel=KL_kernel_Omega(KL_kernel_Position_FiniteT,x,omega,args=(1/Nt,))
+        elif which=="RhoOverOmega" and finiteT_kernel==False:
+            kernel=KL_kernel_Omega(KL_kernel_Position_Vacuum,x,omega)
+        elif which=="Rho" and finiteT_kernel:
+            kernel=KL_kernel_Position_FiniteT(x,omega,1/Nt)
+        elif which=="Rho" and finiteT_kernel==False:
+            kernel=KL_kernel_Position_Vacuum(x,omega)
         else:
             raise ValueError("Invalid choice spectral function target")
         return kernel
 
-    def fitCorrelator(self,x,error,correlator,Nt,omega,which="RhoOverOmega",verbose=True):
+    def fitCorrelator(self,x,error,correlator,finiteT_kernel,Nt,omega,which="RhoOverOmega",network="SpectralNN",verbose=True):
 
-        kernel=self.initKernel(which,Nt,x,omega)
+        kernel=self.initKernel(which,finiteT_kernel,Nt,x,omega)
         del_omega=omega[1]-omega[0]
-
+        # pprint.pprint(kernel[1])
 
         if self.errorWeighting:
             errorWeight=error
@@ -63,9 +285,14 @@ class neuralFit:
 
         constant_input = tf.constant([[1.0]], dtype=tf.float32) #NN
 
-        model = models.SpectralNN(num_output_nodes=len(omega), width=self.width, depth=self.depth)
+        if network == "SpectralNN":
+            model = SpectralNN(num_output_nodes=len(omega), width=self.width, depth=self.depth)
+        elif network == "SpectralNNP2P":
+            model = SpectralNNP2P(num_output_nodes=len(omega), width=self.width, depth=self.depth, lambda_s=self.lambda_s[0], lambda_l2=self.lambda_l2[0], kl_ker=kernel, del_omega=del_omega, gauss_width=errorWeight)
+        else:
+            raise ValueError("Invalid choice of network")
         target_output=correlator
-        lossCalc=lossCalculator.LossCalculator(model=model,
+        lossCalc=LossCalculator(model=model,
                                             y_true=target_output,
                                             kernel=kernel,
                                             delomega=del_omega,
@@ -76,7 +303,7 @@ class neuralFit:
                                             )
 
         optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate[0])
-        trainer=models.networkTrainer(model,optimizer,lossCalc)
+        trainer=networkTrainer(model,optimizer,lossCalc)
         # total_loss_history,loss_history=trainer.train(self.epochs[0],warmup=True,verbose=verbose)
         total_loss_history=[]
         loss_history=[]
@@ -153,13 +380,15 @@ class ParameterHandler:
         correlator_cols = self.params["correlatorCols"]
         if isinstance(correlator_cols, list):
             return correlator_cols
+        elif isinstance(correlator_cols,int):
+            return [correlator_cols]
         elif isinstance(correlator_cols, str) and ':' in correlator_cols:
             start_str, end_str = correlator_cols.split(':')
             start = int(start_str) if start_str else None
             end = int(end_str) if end_str else None
             return list(range(start if start is not None else 0, end + 1 if end is not None else len(np.loadtxt(self.params["correlatorFile"], max_rows=1))))
         else:
-            raise ValueError("correlator_cols must be a list of indices or a string with a range (e.g., '6:10', '6:', ':10', ':').")   
+            raise ValueError("correlator_cols must be a integer index or list of indices or a string with a range (e.g., '6:10', '6:', ':10', ':').")   
 class FitRunner:
     def __init__(self, parameterHandler):
         self.parameterHandler=parameterHandler
@@ -179,11 +408,12 @@ class FitRunner:
             self.parameterHandler.get_params()["omega_points"]
         )
 
-        self.Nt=len(self.x)
+        self.finiteT_kernel=self.parameterHandler.get_params()["FiniteT_kernel"]
 
         self.verbose = self.parameterHandler.get_verbose()
 
         self.multiFit = self.parameterHandler.get_params()["multiFit"]
+        self.multiFitBootstrap_samples = self.parameterHandler.get_params()["multiFitBootstrap_samples"]
 
         self.which = self.parameterHandler.get_which()
 
@@ -202,28 +432,56 @@ class FitRunner:
         results = []
 
         if self.correlators.ndim == 1:
-            self.correlators = [self.correlators]
+            self.correlators = np.array([self.correlators])
         else:
             self.correlators = self.correlators.T
         
+        Nt=len(self.x)
+
+        n_correlators = self.correlators.shape[0]
+        
         if self.multiFit:
-            start_time = time.time()
-            print("="*40)
-            print(f"Multifitting {len(self.correlators)} correlators")
-            print("="*40)
-            sf = fitter.fitCorrelator(
-                self.x,
-                self.error,
-                self.correlators,
-                self.Nt,
-                self.omega,
-                which=self.which,
-                verbose=self.verbose
-            )                 
-            if self.verbose:
+            if self.multiFitBootstrap_samples == 0:
+                start_time = time.time()
                 print("="*40)
-                print(f"Training time: {time.time()-start_time:.2f} seconds")
-            results.append(sf)
+                print(f"Multifitting {len(self.correlators)} correlators")
+                print("="*40)
+                sf = fitter.fitCorrelator(
+                    self.x,
+                    self.error,
+                    self.correlators,
+                    self.finiteT_kernel,
+                    Nt,
+                    self.omega,
+                    which=self.which,
+                    verbose=self.verbose
+                )                 
+                if self.verbose:
+                    print("="*40)
+                    print(f"Training time: {time.time()-start_time:.2f} seconds")
+                results.append(sf)
+            else:
+                for i in range(self.multiFitBootstrap_samples):
+                    #pick n_correlators random correlators from self.correlators 
+                    random_correlators = self.correlators[np.random.choice(n_correlators, n_correlators, replace=True)]
+                    start_time = time.time()
+                    print("="*40)
+                    print(f"Multifitting {len(self.correlators)} correlators with bootstrap sample {i+1}/{self.multiFitBootstrap_samples}")
+                    print("="*40)
+                    sf = fitter.fitCorrelator(
+                        self.x,
+                        self.error,
+                        random_correlators,
+                        self.finiteT_kernel,
+                        Nt,
+                        self.omega,
+                        which=self.which,
+                        verbose=self.verbose
+                    )                 
+                    if self.verbose:
+                        print("="*40)
+                        print(f"Training time: {time.time()-start_time:.2f} seconds")
+                    results.append(sf)
         else:
             for i,corr in enumerate(self.correlators):
                 start_time = time.time()
@@ -234,7 +492,8 @@ class FitRunner:
                     self.x,
                     self.error,
                     corr,
-                    self.Nt,
+                    self.finiteT_kernel,
+                    Nt,
                     self.omega,
                     which=self.which,
                     verbose=self.verbose
@@ -257,7 +516,12 @@ class FitRunner:
             header += f" {which}_sample_{i}"
         writeData = np.column_stack((self.omega,mean,error,results.T))
         np.savetxt(outputFile, writeData, header=header)
-
+    
+    def save_loss_history(self, loss_history, outputFile):
+        return None
+    
+    def save_params(self, params, outputFile):
+        return None
 def initializeArgumentParser(paramsDefaultDict):
     parser = argparse.ArgumentParser(
         prog="neuralFit",
@@ -281,10 +545,10 @@ def initializeArgumentParser(paramsDefaultDict):
             nargsArg=1
         parser.add_argument(
             f"--{name}",
-            type=typeArg,
+            # type=typeArg,
             nargs=nargsArg,
             # default=default,
-            help=f"Value for parameter '{name}' of type {typeString}"
+            help=f"Value for parameter '{name}'"
         )
     return parser
 
@@ -316,29 +580,40 @@ paramsDefaultDict = {
     "width": 32,
     "depth": 3,
     "errorWeighting": True,
+    "network": "SpectralNN",
     #Correlator/Rho params
     "omega_min": 0,
     "omega_max": 10,
     "omega_points": 500,
     "which": "RhoOverOmega",
+    "FiniteT_kernel": True,
     "multiFit": False,
+    "multiFitBootstrap_samples": 0,
+    "seed": 1,
     "correlatorFile": None,
     "xCol": 0,
     "meanCol": 1,
     "errorCol": 2,
-    "correlatorCols": [3],
+    "correlatorCols": "3:",
     #General Params
+    "saveParams": False,
+    "saveLossHistory": False,
     "verbose": False,
     "outputFile": None
 }
 
 
 #TODOs
-# - Multifit bootstrap
-# - implement change of network architecture
+# ---------- Multifit bootstrap
+# ---------- implement change of network architecture
+# ----------- choosing zeroT or FiniteT kernel
+# - way to save loss history
+# - way to save parameters
 # - implement not only error weighting but correlator mean value weighting
 # - check parameter handling and checking
 # - implement error handling
+# --------- merge verything into one file
+# - implement multiprocessing
 # - make documentation
 if __name__ == "__main__":
     main(paramsDefaultDict)

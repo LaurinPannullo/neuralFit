@@ -18,6 +18,14 @@ def KL_kernel_Position_FiniteT(Position, Omega,T):
     Position = Position[:, np.newaxis]  # Reshape Position as column to allow broadcasting
     with np.errstate(divide='ignore'):
         ker = np.cosh(Omega * (Position-1/(2*T))) / np.sinh(Omega/2/T)
+
+        # set all entries in ker to 1 where Position is modulo 1/T and the entry is nan, because of numerical instability for large Omega
+        ker[np.isnan(ker) & (Position % (1/T) == 0)] = 1
+        #set all other nan entries to 0
+        ker[np.isnan(ker)] = 0
+
+        # ker[(Position%1/T==0)]=1
+        # ker[(Position[:,0]!=0)]=0
     return ker
 
 def KL_kernel_Omega(KL,x,Omega,args=[]):

@@ -30,14 +30,9 @@ class SpectralNN(tf.keras.Model):
 
 
 class SpectralNNP2P(tf.keras.Model):
-    def __init__(self, num_output_nodes, width=64, depth=3, lambda_s=None, lambda_l2=None, kl_ker=None, del_omega=None, gauss_width=None):
+    def __init__(self, num_output_nodes, width=64, depth=3):
         super(SpectralNNP2P, self).__init__()
-        self.lambda_s = lambda_s
-        self.lambda_l2 = lambda_l2
-        self.kl_ker = kl_ker
-        self.del_omega = del_omega
-        self.gauss_width = gauss_width
-        
+
         # Create hidden layers
         self.hidden_layers = []
         for _ in range(depth):
