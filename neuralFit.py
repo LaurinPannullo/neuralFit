@@ -140,6 +140,9 @@ class ParameterHandler:
             errorWeighting=self.params["errorWeighting"]
         )
     
+    def get_which(self):
+        return self.params["which"]
+    
     def get_correlator_file(self):
         return self.params["correlatorFile"]
 
@@ -152,13 +155,11 @@ class ParameterHandler:
             return correlator_cols
         elif isinstance(correlator_cols, str) and ':' in correlator_cols:
             start_str, end_str = correlator_cols.split(':')
-            start, end = int(start_str), int(end_str)
-            return list(range(start, end+1))
+            start = int(start_str) if start_str else None
+            end = int(end_str) if end_str else None
+            return list(range(start if start is not None else 0, end + 1 if end is not None else len(np.loadtxt(self.params["correlatorFile"], max_rows=1))))
         else:
-            raise ValueError("correlator_cols must be a list of indices or a string with a range (e.g., '6:10').")
-        
-
-    
+            raise ValueError("correlator_cols must be a list of indices or a string with a range (e.g., '6:10', '6:', ':10', ':').")   
 class FitRunner:
     def __init__(self, parameterHandler):
         self.parameterHandler=parameterHandler
@@ -181,6 +182,12 @@ class FitRunner:
         self.Nt=len(self.x)
 
         self.verbose = self.parameterHandler.get_verbose()
+
+        self.multiFit = self.parameterHandler.get_params()["multiFit"]
+
+        self.which = self.parameterHandler.get_which()
+
+        
     
     def extractColumns(self, file, x_col, mean_col, error_col, correlator_cols):
         data = np.loadtxt(file)
@@ -190,7 +197,7 @@ class FitRunner:
         correlator = data[:, correlator_cols]
         return x, mean, error, correlator
 
-    def run_fits(self, which="RhoOverOmega"):
+    def run_fits(self):
         fitter = neuralFit(self.net_params)
         results = []
 
@@ -198,24 +205,44 @@ class FitRunner:
             self.correlators = [self.correlators]
         else:
             self.correlators = self.correlators.T
-        for i,corr in enumerate(self.correlators):
+        
+        if self.multiFit:
             start_time = time.time()
             print("="*40)
-            print(f"Fitting correlator {i+1}/{len(self.correlators)}")
+            print(f"Multifitting {len(self.correlators)} correlators")
             print("="*40)
             sf = fitter.fitCorrelator(
                 self.x,
                 self.error,
-                corr,
+                self.correlators,
                 self.Nt,
                 self.omega,
-                which=which,
+                which=self.which,
                 verbose=self.verbose
             )                 
             if self.verbose:
-                print("-"*40)
+                print("="*40)
                 print(f"Training time: {time.time()-start_time:.2f} seconds")
             results.append(sf)
+        else:
+            for i,corr in enumerate(self.correlators):
+                start_time = time.time()
+                print("="*40)
+                print(f"Fitting correlator {i+1}/{len(self.correlators)}")
+                print("="*40)
+                sf = fitter.fitCorrelator(
+                    self.x,
+                    self.error,
+                    corr,
+                    self.Nt,
+                    self.omega,
+                    which=self.which,
+                    verbose=self.verbose
+                )                 
+                if self.verbose:
+                    print("-"*40)
+                    print(f"Training time: {time.time()-start_time:.2f} seconds")
+                results.append(sf)
         return np.array(results)
     
     def calculate_mean_error(self, results):
@@ -294,6 +321,7 @@ paramsDefaultDict = {
     "omega_max": 10,
     "omega_points": 500,
     "which": "RhoOverOmega",
+    "multiFit": False,
     "correlatorFile": None,
     "xCol": 0,
     "meanCol": 1,
@@ -304,5 +332,13 @@ paramsDefaultDict = {
     "outputFile": None
 }
 
+
+#TODOs
+# - Multifit bootstrap
+# - implement change of network architecture
+# - implement not only error weighting but correlator mean value weighting
+# - check parameter handling and checking
+# - implement error handling
+# - make documentation
 if __name__ == "__main__":
     main(paramsDefaultDict)
