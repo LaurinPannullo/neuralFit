@@ -8,6 +8,14 @@ import json
 import argparse
 import time
 import pprint
+import os
+
+
+
+# Helper functions
+
+
+
 
 
 # correlator classes and functions
@@ -70,13 +78,13 @@ def Di(KL, rhoi, delomega):
 # former content of models.py
 
 class SpectralNN(tf.keras.Model):
-    def __init__(self, num_output_nodes, width=64, depth=3):
+    def __init__(self, num_output_nodes, width=[32]):
         super(SpectralNN, self).__init__()
         
         # Create hidden layers
         self.hidden_layers = []
-        for _ in range(depth):
-            self.hidden_layers.append(tf.keras.layers.Dense(width, activation='elu', use_bias=False))
+        for w in width:
+            self.hidden_layers.append(tf.keras.layers.Dense(w, activation='elu', use_bias=False))
         
         # Output layer (softplus activation to ensure positive definiteness)
         self.output_layer = tf.keras.layers.Dense(num_output_nodes, activation=tf.keras.activations.softplus, use_bias=False)  # Shape [500]
@@ -92,13 +100,13 @@ class SpectralNN(tf.keras.Model):
         return output
 
 class SpectralNNP2P(tf.keras.Model):
-    def __init__(self, num_output_nodes, width=64, depth=3):
+    def __init__(self, num_output_nodes, width=[32]):
         super(SpectralNNP2P, self).__init__()
 
         # Create hidden layers
         self.hidden_layers = []
-        for _ in range(depth):
-            self.hidden_layers.append(tf.keras.layers.Dense(width, activation='elu'))
+        for w in width:
+            self.hidden_layers.append(tf.keras.layers.Dense(w, activation='elu'))
         
         # Output layer that produces one output per frequency (500 outputs)
         self.output_layer = tf.keras.layers.Dense(1, activation='softplus')
@@ -243,9 +251,32 @@ class networkParameters:
     lambda_l2: List = field(default_factory=list)
     epochs: List = field(default_factory=list)
     learning_rate: List = field(default_factory=list)
-    width: int = 0
-    depth: int = 0
+    width: List = field(default_factory=list)
     errorWeighting: bool = False
+    networkStructure: str = "SpectralNN"
+
+    def __post_init__(self):
+        # Ensure lambda_s, lambda_l2, epochs, and learning_rate are lists of the same length
+        if not (len(self.lambda_s) == len(self.lambda_l2) == len(self.epochs) == len(self.learning_rate)):
+            raise ValueError("lambda_s, lambda_l2, epochs, and learning_rate must be lists of the same length.")
+        
+        # Ensure all entries in lambda_s, lambda_l2 and learning_rate are floats
+        if not all(isinstance(item, float) for item in self.lambda_s):
+            raise ValueError("All entries in lambda_s must be floats.")
+        if not all(isinstance(item, float) for item in self.lambda_l2):
+            raise ValueError("All entries in lambda_l2 must be floats.")
+        if not all(isinstance(item, float) for item in self.learning_rate):
+            raise ValueError("All entries in learning_rate must be floats.")
+        
+        # Ensure all entries in epochs are integers
+        if not all(isinstance(item, int) for item in self.epochs):
+            raise ValueError("All entries in epochs must be integers.")
+        
+        #Ensure that width is a list of integers 
+        if not all(isinstance(item, int) for item in self.width):
+            raise ValueError("All entries in width must be integers.")
+        
+
    
 
 class neuralFit:
@@ -255,26 +286,27 @@ class neuralFit:
         self.epochs=networkParameters.epochs
         self.learning_rate=networkParameters.learning_rate
         self.width=networkParameters.width
-        self.depth=networkParameters.depth
+        self.depth=len(self.width)
         self.errorWeighting=networkParameters.errorWeighting
+        self.networkStructure=networkParameters.networkStructure
 
 
-    def initKernel(self,which:str,finiteT_kernel:bool,Nt:int,x:np.ndarray,omega:np.ndarray):
-        if which=="RhoOverOmega" and finiteT_kernel:
+    def initKernel(self,extractedQuantity:str,finiteT_kernel:bool,Nt:int,x:np.ndarray,omega:np.ndarray):
+        if extractedQuantity=="RhoOverOmega" and finiteT_kernel:
             kernel=KL_kernel_Omega(KL_kernel_Position_FiniteT,x,omega,args=(1/Nt,))
-        elif which=="RhoOverOmega" and finiteT_kernel==False:
+        elif extractedQuantity=="RhoOverOmega" and finiteT_kernel==False:
             kernel=KL_kernel_Omega(KL_kernel_Position_Vacuum,x,omega)
-        elif which=="Rho" and finiteT_kernel:
+        elif extractedQuantity=="Rho" and finiteT_kernel:
             kernel=KL_kernel_Position_FiniteT(x,omega,1/Nt)
-        elif which=="Rho" and finiteT_kernel==False:
+        elif extractedQuantity=="Rho" and finiteT_kernel==False:
             kernel=KL_kernel_Position_Vacuum(x,omega)
         else:
             raise ValueError("Invalid choice spectral function target")
         return kernel
 
-    def fitCorrelator(self,x,error,correlator,finiteT_kernel,Nt,omega,which="RhoOverOmega",network="SpectralNN",verbose=True):
+    def fitCorrelator(self,x,error,correlator,finiteT_kernel,Nt,omega,extractedQuantity="RhoOverOmega",verbose=True):
 
-        kernel=self.initKernel(which,finiteT_kernel,Nt,x,omega)
+        kernel=self.initKernel(extractedQuantity,finiteT_kernel,Nt,x,omega)
         del_omega=omega[1]-omega[0]
         # pprint.pprint(kernel[1])
 
@@ -285,10 +317,10 @@ class neuralFit:
 
         constant_input = tf.constant([[1.0]], dtype=tf.float32) #NN
 
-        if network == "SpectralNN":
-            model = SpectralNN(num_output_nodes=len(omega), width=self.width, depth=self.depth)
-        elif network == "SpectralNNP2P":
-            model = SpectralNNP2P(num_output_nodes=len(omega), width=self.width, depth=self.depth, lambda_s=self.lambda_s[0], lambda_l2=self.lambda_l2[0], kl_ker=kernel, del_omega=del_omega, gauss_width=errorWeight)
+        if self.networkStructure == "SpectralNN":
+            model = SpectralNN(num_output_nodes=len(omega), width=self.width)
+        elif self.networkStructure == "SpectralNNP2P":
+            model = SpectralNNP2P(num_output_nodes=len(omega), width=self.width, lambda_s=self.lambda_s[0], lambda_l2=self.lambda_l2[0], kl_ker=kernel, del_omega=del_omega, gauss_width=errorWeight)
         else:
             raise ValueError("Invalid choice of network")
         target_output=correlator
@@ -344,7 +376,7 @@ class ParameterHandler:
     def check_parameters(self):
         for name in self.allowed_params:
             if name == "outputFile" and self.params[name] is None:
-              self.params[name] = f"{self.params['which']}_meanTraining_{self.params['correlatorFile']}"  
+              continue
             elif name not in self.params or self.params[name] is None:
                 raise ValueError(f"Parameter '{name}' is not set.")
 
@@ -356,22 +388,27 @@ class ParameterHandler:
     def get_params(self):
         return self.params
     
+    def get_width(self):
+        width = self.params["width"]
+        return [width] if isinstance(width, int) else width
+    
     def getNetworkParams(self):
         return networkParameters(
             lambda_s=self.params["lambda_s"],
             lambda_l2=self.params["lambda_l2"],
             epochs=self.params["epochs"],
             learning_rate=self.params["learning_rate"],
-            width=self.params["width"],
-            depth=self.params["depth"],
-            errorWeighting=self.params["errorWeighting"]
+            width=self.get_width(),
+            errorWeighting=self.params["errorWeighting"],
+            networkStructure=self.params["networkStructure"]
         )
     
-    def get_which(self):
-        return self.params["which"]
+    def get_extractedQuantity(self):
+        return self.params["extractedQuantity"]
     
     def get_correlator_file(self):
-        return self.params["correlatorFile"]
+        return os.path.abspath(self.params["correlatorFile"])
+    
 
     def get_verbose(self):
         return self.params["verbose"]
@@ -415,7 +452,17 @@ class FitRunner:
         self.multiFit = self.parameterHandler.get_params()["multiFit"]
         self.multiFitBootstrap_samples = self.parameterHandler.get_params()["multiFitBootstrap_samples"]
 
-        self.which = self.parameterHandler.get_which()
+        self.extractedQuantity = self.parameterHandler.get_extractedQuantity()
+
+        self.Nt = self.parameterHandler.get_params()["Nt"]
+        if self.Nt==0:
+            self.Nt=len(self.x)
+
+        self.outputDir = os.path.abspath(self.parameterHandler.get_params()["outputDir"])
+        if self.parameterHandler.get_params()["outputFile"] is None:
+            self.outputFile = f"{self.extractedQuantity}_{os.path.basename(self.parameterHandler.get_correlator_file())}" 
+        else:
+            self.outputFile = os.path.basename(self.parameterHandler.get_params()["outputFile"])
 
         
     
@@ -436,7 +483,6 @@ class FitRunner:
         else:
             self.correlators = self.correlators.T
         
-        Nt=len(self.x)
 
         n_correlators = self.correlators.shape[0]
         
@@ -451,9 +497,9 @@ class FitRunner:
                     self.error,
                     self.correlators,
                     self.finiteT_kernel,
-                    Nt,
+                    self.Nt,
                     self.omega,
-                    which=self.which,
+                    extractedQuantity=self.extractedQuantity,
                     verbose=self.verbose
                 )                 
                 if self.verbose:
@@ -473,9 +519,9 @@ class FitRunner:
                         self.error,
                         random_correlators,
                         self.finiteT_kernel,
-                        Nt,
+                        self.Nt,
                         self.omega,
-                        which=self.which,
+                        extractedQuantity=self.extractedQuantity,
                         verbose=self.verbose
                     )                 
                     if self.verbose:
@@ -493,9 +539,9 @@ class FitRunner:
                     self.error,
                     corr,
                     self.finiteT_kernel,
-                    Nt,
+                    self.Nt,
                     self.omega,
-                    which=self.which,
+                    extractedQuantity=self.extractedQuantity,
                     verbose=self.verbose
                 )                 
                 if self.verbose:
@@ -510,18 +556,23 @@ class FitRunner:
         error=np.sqrt((N-1)*np.sum((results-mean)**2,axis=0)/N)
         return mean,error
     
-    def save_results(self, mean,error,results, outputFile,which="RhoOverOmega"):
-        header ="# Omega "+which+"_mean "+which+"_error"
+    def save_results(self, mean,error,results,extractedQuantity="RhoOverOmega"):
+        header ="# Omega "+extractedQuantity+"_mean "+extractedQuantity+"_error"
         for i in range(len(results)):
-            header += f" {which}_sample_{i}"
+            header += f" {extractedQuantity}_sample_{i}"
         writeData = np.column_stack((self.omega,mean,error,results.T))
-        np.savetxt(outputFile, writeData, header=header)
+        np.savetxt(os.path.join(self.outputDir,self.outputFile), writeData, header=header)
+
+        if self.parameterHandler.get_params()["saveParams"]:
+            self.save_params(self.parameterHandler.get_params(),os.path.join(self.outputDir,self.outputFile+".params"))
     
     def save_loss_history(self, loss_history, outputFile):
         return None
     
     def save_params(self, params, outputFile):
-        return None
+        with open(outputFile+'.json', 'w') as f:
+            json.dump(params, f, indent=4)
+    
 def initializeArgumentParser(paramsDefaultDict):
     parser = argparse.ArgumentParser(
         prog="neuralFit",
@@ -542,10 +593,10 @@ def initializeArgumentParser(paramsDefaultDict):
             typeArg=type(default[0])
             typeString=f"List of {typeArg.__name__}"
         else:
-            nargsArg=1
+            nargsArg=None
         parser.add_argument(
             f"--{name}",
-            # type=typeArg,
+            type=typeArg,
             nargs=nargsArg,
             # default=default,
             help=f"Value for parameter '{name}'"
@@ -567,7 +618,7 @@ def main(paramsDefaultDict):
     fitRunner = FitRunner(parameterHandler)
     results = fitRunner.run_fits()
     mean,error = fitRunner.calculate_mean_error(results)
-    fitRunner.save_results(mean,error,results,parameterHandler.get_params()["outputFile"])
+    fitRunner.save_results(mean,error,results)
 
 
 
@@ -577,15 +628,15 @@ paramsDefaultDict = {
     "lambda_l2": [1e-8],
     "epochs": [100],
     "learning_rate": [1e-4],
-    "width": 32,
-    "depth": 3,
+    "width": [32,32,32],
     "errorWeighting": True,
-    "network": "SpectralNN",
+    "networkStructure": "SpectralNN",
     #Correlator/Rho params
     "omega_min": 0,
     "omega_max": 10,
     "omega_points": 500,
-    "which": "RhoOverOmega",
+    "Nt": 0,
+    "extractedQuantity": "RhoOverOmega",
     "FiniteT_kernel": True,
     "multiFit": False,
     "multiFitBootstrap_samples": 0,
@@ -599,21 +650,35 @@ paramsDefaultDict = {
     "saveParams": False,
     "saveLossHistory": False,
     "verbose": False,
-    "outputFile": None
+    "outputFile": None,
+    "outputDir": ''
+
 }
 
 
 #TODOs
-# ---------- Multifit bootstrap
-# ---------- implement change of network architecture
-# ----------- choosing zeroT or FiniteT kernel
+# X Multifit bootstrap
+# X implement change of network architecture
+# X choosing zeroT or FiniteT kernel
+# - always fit mean and use this to give the mean column in the output file
+# - implement both jackknife and bootstrap error estimation
+# -- calculate error from samples
+# X width as list for adaptive network width
+# X check that training stage lists are of equal length
+# X find better name for 'which' parameter
+# X Nt as explicit parameter
+# - make such that correlatorfile and outputfile can handle relative paths
 # - way to save loss history
-# - way to save parameters
-# - implement not only error weighting but correlator mean value weighting
+# X way to save parameters
 # - check parameter handling and checking
 # - implement error handling
-# --------- merge verything into one file
-# - implement multiprocessing
+# X merge verything into one file
 # - make documentation
+# -- file parameters can be relative, but relative to cwd
+# -- also some part about tensorflow installation and python virtual environments
+# ----------------
+# - make momentum kernel accesible
+# - implement multiprocessing
+# - implement not only error weighting but correlator mean value weighting
 if __name__ == "__main__":
     main(paramsDefaultDict)
