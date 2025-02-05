@@ -144,8 +144,9 @@ class networkTrainer:
             total_loss_value,individual_losses = self.train_step(epoch)
             losses.append(total_loss_value)
             individual_losses_history.append(individual_losses)
-            if verbose and net_num_epochs>10 and epoch % (net_num_epochs//10) == 0:
+            if verbose and (epoch==0 or (net_num_epochs>10 and epoch % (net_num_epochs//10) == 0)):
                 print(f'Epoch {epoch}, Loss: {total_loss_value}')
+        print(f'Epoch {epoch}, Loss: {total_loss_value}')
         if verbose:
             end_time = time.time()
             print(f'Training took {end_time-start_time:.2f} seconds')
@@ -187,7 +188,8 @@ def total_loss(y_pred, y_true=None, std=None, rho=None, model=None,
     main_loss = custom_loss(y_pred, y_true,std)
     
     # Total loss = main loss + smoothness regularizer + L2 regularization
-    return main_loss + lambda_s * smooth_loss + (lambda_l2 * l2_loss)*0.5,[main_loss,lambda_s *smooth_loss,lambda_l2 *l2_loss*0.5]
+    total_loss = main_loss + lambda_s * smooth_loss + (lambda_l2 * l2_loss)*0.5
+    return total_loss,[total_loss,main_loss,lambda_s *smooth_loss,lambda_l2 *l2_loss*0.5]
 
 class LossCalculator:
     def __init__(self, model=None,y_true=None,std=None,kernel=None,
@@ -424,6 +426,10 @@ class ParameterHandler:
             start = int(start_str) if start_str else None
             end = int(end_str) if end_str else None
             return list(range(start if start is not None else 0, end + 1 if end is not None else len(np.loadtxt(self.params["correlatorFile"], max_rows=1))))
+        elif isinstance(correlator_cols, str) and correlator_cols.isdigit():
+            return [int(correlator_cols)]
+        elif (isinstance(correlator_cols, str) and correlator_cols == '') or correlator_cols is None:
+            return []
         else:
             raise ValueError("correlator_cols must be a integer index or list of indices or a string with a range (e.g., '6:10', '6:', ':10', ':').")   
 class FitRunner:
@@ -510,7 +516,7 @@ class FitRunner:
         else:
             start_time = time.time()
             print("="*40)
-            print(f"Fitting correlator sample {i+1}/{len(self.correlators)}")
+            print(f"Fitting mean correlator")
             print("="*40)
             sf,loss_history = fitter.fitCorrelator(
                 self.x,
@@ -557,23 +563,26 @@ class FitRunner:
         return error
     
     def save_results(self, mean,error,samples,loss_history,extractedQuantity="RhoOverOmega"):
-        header ="# Omega "+self.extractedQuantity+"_mean "+self.extractedQuantity+"_error"
-        for i in range(len(samples)):
-            header += f" {self.extractedQuantity}_sample_{i}"
-        writeData = np.column_stack((self.omega,mean,error,samples.T))
+        header ="Omega "+self.extractedQuantity+"_mean "+self.extractedQuantity+"_error"
+        if samples is not None:
+            for i in range(len(samples)):
+                header += f" {self.extractedQuantity}_sample_{i}"
+            writeData = np.column_stack((self.omega,mean,error,samples.T))
+        else:
+            writeData = np.column_stack((self.omega,mean,error))
         np.savetxt(os.path.join(self.outputDir,self.outputFile), writeData, header=header)
 
         if self.parameterHandler.get_params()["saveParams"]:
             self.save_params(self.parameterHandler.get_params(),os.path.join(self.outputDir,self.outputFile+".params"))
         
         if self.parameterHandler.get_params()["saveLossHistory"]:
-            self.save_loss_history(loss_history,os.path.join(self.outputDir,self.outputFile+".loss"))
+            self.save_loss_history(loss_history,os.path.join(self.outputDir,self.outputFile+".loss.dat"))
     
     def save_loss_history(self, loss_history, outputFile):
-        header ="# mean_main_loss mean_smoothness_loss mean_l2_loss"
+        header ="mean_total_loss mean_main_loss mean_smoothness_loss mean_l2_loss"
         for i in range(len(loss_history[1:])):
-            header += f" sample_{i}_main_loss sample_{i}_smoothness_loss sample_{i}_l2_loss"
-        np.savetxt(os.path.join(self.outputDir,self.outputFile), loss_history, header=header)
+            header += f" sample_{i}_total_loss sample_{i}_main_loss sample_{i}_smoothness_loss sample_{i}_l2_loss"
+        np.savetxt(outputFile, loss_history.transpose(1,0,2).reshape(loss_history.shape[1],-1), header=header)
     
     def save_params(self, params, outputFile):
         with open(outputFile+'.json', 'w') as f:
@@ -678,7 +687,7 @@ paramsDefaultDict = {
 # X find better name for 'which' parameter
 # X Nt as explicit parameter
 # X make such that correlatorfile and outputfile can handle relative paths
-# - way to save loss history
+# X way to save loss history
 # X way to save parameters
 # - check parameter handling and checking
 # - implement error handling
