@@ -187,7 +187,7 @@ def total_loss(y_pred, y_true=None, std=None, rho=None, model=None,
     main_loss = custom_loss(y_pred, y_true,std)
     
     # Total loss = main loss + smoothness regularizer + L2 regularization
-    return main_loss + lambda_s * smooth_loss + (lambda_l2 * l2_loss)*0.5,[main_loss,smooth_loss,l2_loss]
+    return main_loss + lambda_s * smooth_loss + (lambda_l2 * l2_loss)*0.5,[main_loss,lambda_s *smooth_loss,lambda_l2 *l2_loss*0.5]
 
 class LossCalculator:
     def __init__(self, model=None,y_true=None,std=None,kernel=None,
@@ -353,7 +353,7 @@ class neuralFit:
 
 
         spectralFunction=model(constant_input)
-        return np.squeeze(spectralFunction)
+        return np.squeeze(spectralFunction),np.squeeze(loss_history)
    
 class ParameterHandler:
     def __init__(self, paramsDefaultDict):
@@ -450,7 +450,6 @@ class FitRunner:
         self.verbose = self.parameterHandler.get_verbose()
 
         self.multiFit = self.parameterHandler.get_params()["multiFit"]
-        self.multiFitBootstrap_samples = self.parameterHandler.get_params()["multiFitBootstrap_samples"]
 
         self.extractedQuantity = self.parameterHandler.get_extractedQuantity()
 
@@ -477,6 +476,7 @@ class FitRunner:
     def run_fits(self):
         fitter = neuralFit(self.net_params)
         results = []
+        loss_histories = []
 
         if self.correlators.ndim == 1:
             self.correlators = np.array([self.correlators])
@@ -487,54 +487,53 @@ class FitRunner:
         n_correlators = self.correlators.shape[0]
         
         if self.multiFit:
-            if self.multiFitBootstrap_samples == 0:
-                start_time = time.time()
+            start_time = time.time()
+            print("="*40)
+            print(f"Multifitting {len(self.correlators)} correlators")
+            print("="*40)
+            sf,loss_history = fitter.fitCorrelator(
+                self.x,
+                self.error,
+                self.correlators,
+                self.finiteT_kernel,
+                self.Nt,
+                self.omega,
+                extractedQuantity=self.extractedQuantity,
+                verbose=self.verbose
+            )                 
+            if self.verbose:
                 print("="*40)
-                print(f"Multifitting {len(self.correlators)} correlators")
-                print("="*40)
-                sf = fitter.fitCorrelator(
-                    self.x,
-                    self.error,
-                    self.correlators,
-                    self.finiteT_kernel,
-                    self.Nt,
-                    self.omega,
-                    extractedQuantity=self.extractedQuantity,
-                    verbose=self.verbose
-                )                 
-                if self.verbose:
-                    print("="*40)
-                    print(f"Training time: {time.time()-start_time:.2f} seconds")
-                results.append(sf)
-            else:
-                for i in range(self.multiFitBootstrap_samples):
-                    #pick n_correlators random correlators from self.correlators 
-                    random_correlators = self.correlators[np.random.choice(n_correlators, n_correlators, replace=True)]
-                    start_time = time.time()
-                    print("="*40)
-                    print(f"Multifitting {len(self.correlators)} correlators with bootstrap sample {i+1}/{self.multiFitBootstrap_samples}")
-                    print("="*40)
-                    sf = fitter.fitCorrelator(
-                        self.x,
-                        self.error,
-                        random_correlators,
-                        self.finiteT_kernel,
-                        self.Nt,
-                        self.omega,
-                        extractedQuantity=self.extractedQuantity,
-                        verbose=self.verbose
-                    )                 
-                    if self.verbose:
-                        print("="*40)
-                        print(f"Training time: {time.time()-start_time:.2f} seconds")
-                    results.append(sf)
+                print(f"Training time: {time.time()-start_time:.2f} seconds")
+            results.append(sf)
+            loss_histories.append(loss_history)
+
         else:
+            start_time = time.time()
+            print("="*40)
+            print(f"Fitting correlator sample {i+1}/{len(self.correlators)}")
+            print("="*40)
+            sf,loss_history = fitter.fitCorrelator(
+                self.x,
+                self.error,
+                self.mean,
+                self.finiteT_kernel,
+                self.Nt,
+                self.omega,
+                extractedQuantity=self.extractedQuantity,
+                verbose=self.verbose
+            )                 
+            if self.verbose:
+                print("-"*40)
+                print(f"Training time: {time.time()-start_time:.2f} seconds")
+            results.append(sf)
+            loss_histories.append(loss_history)
+
             for i,corr in enumerate(self.correlators):
                 start_time = time.time()
                 print("="*40)
-                print(f"Fitting correlator {i+1}/{len(self.correlators)}")
+                print(f"Fitting correlator sample {i+1}/{len(self.correlators)}")
                 print("="*40)
-                sf = fitter.fitCorrelator(
+                sf,loss_history = fitter.fitCorrelator(
                     self.x,
                     self.error,
                     corr,
@@ -548,26 +547,33 @@ class FitRunner:
                     print("-"*40)
                     print(f"Training time: {time.time()-start_time:.2f} seconds")
                 results.append(sf)
-        return np.array(results)
+                loss_histories.append(loss_history)
+        return np.array(results),np.array(loss_histories)
     
-    def calculate_mean_error(self, results):
-        N=len(results)
-        mean=np.mean(results,axis=0)
-        error=np.sqrt((N-1)*np.sum((results-mean)**2,axis=0)/N)
-        return mean,error
+    def calculate_mean_error(self, samples, ):
+        N=len(samples)
+        mean=np.mean(samples,axis=0)
+        error=np.sqrt((N-1)*np.sum((samples-mean)**2,axis=0)/N)
+        return error
     
-    def save_results(self, mean,error,results,extractedQuantity="RhoOverOmega"):
-        header ="# Omega "+extractedQuantity+"_mean "+extractedQuantity+"_error"
-        for i in range(len(results)):
-            header += f" {extractedQuantity}_sample_{i}"
-        writeData = np.column_stack((self.omega,mean,error,results.T))
+    def save_results(self, mean,error,samples,loss_history,extractedQuantity="RhoOverOmega"):
+        header ="# Omega "+self.extractedQuantity+"_mean "+self.extractedQuantity+"_error"
+        for i in range(len(samples)):
+            header += f" {self.extractedQuantity}_sample_{i}"
+        writeData = np.column_stack((self.omega,mean,error,samples.T))
         np.savetxt(os.path.join(self.outputDir,self.outputFile), writeData, header=header)
 
         if self.parameterHandler.get_params()["saveParams"]:
             self.save_params(self.parameterHandler.get_params(),os.path.join(self.outputDir,self.outputFile+".params"))
+        
+        if self.parameterHandler.get_params()["saveLossHistory"]:
+            self.save_loss_history(loss_history,os.path.join(self.outputDir,self.outputFile+".loss"))
     
     def save_loss_history(self, loss_history, outputFile):
-        return None
+        header ="# mean_main_loss mean_smoothness_loss mean_l2_loss"
+        for i in range(len(loss_history[1:])):
+            header += f" sample_{i}_main_loss sample_{i}_smoothness_loss sample_{i}_l2_loss"
+        np.savetxt(os.path.join(self.outputDir,self.outputFile), loss_history, header=header)
     
     def save_params(self, params, outputFile):
         with open(outputFile+'.json', 'w') as f:
@@ -616,9 +622,15 @@ def main(paramsDefaultDict):
         pprint.pprint(parameterHandler.get_params())
 
     fitRunner = FitRunner(parameterHandler)
-    results = fitRunner.run_fits()
-    mean,error = fitRunner.calculate_mean_error(results)
-    fitRunner.save_results(mean,error,results)
+    results,loss_histories = fitRunner.run_fits()
+    mean = results[0]
+    if len(results)>1:
+        samples = results[1:]
+        error = fitRunner.calculate_mean_error(samples)
+    else:
+        samples = None
+        error = np.zeros(len(results[0]))
+    fitRunner.save_results(mean,error,samples,loss_histories)
 
 
 
@@ -639,8 +651,6 @@ paramsDefaultDict = {
     "extractedQuantity": "RhoOverOmega",
     "FiniteT_kernel": True,
     "multiFit": False,
-    "multiFitBootstrap_samples": 0,
-    "seed": 1,
     "correlatorFile": None,
     "xCol": 0,
     "meanCol": 1,
@@ -667,7 +677,7 @@ paramsDefaultDict = {
 # X check that training stage lists are of equal length
 # X find better name for 'which' parameter
 # X Nt as explicit parameter
-# - make such that correlatorfile and outputfile can handle relative paths
+# X make such that correlatorfile and outputfile can handle relative paths
 # - way to save loss history
 # X way to save parameters
 # - check parameter handling and checking
