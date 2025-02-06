@@ -556,20 +556,25 @@ class FitRunner:
                 loss_histories.append(loss_history)
         return np.array(results),np.array(loss_histories)
     
-    def calculate_mean_error(self, samples, ):
+    def calculate_mean_error(self, mean, samples, errormethod="jackknife"):
         N=len(samples)
-        mean=np.mean(samples,axis=0)
-        error=np.sqrt((N-1)*np.sum((samples-mean)**2,axis=0)/N)
+        if errormethod=="jackknife":
+            fac=N-1
+        elif errormethod=="bootstrap":
+            fac=1
+        else:
+            raise ValueError("Invalid choice of error estimation method")
+        error=np.sqrt(fac/N*np.sum((samples-mean)**2,axis=0))
         return error
     
     def save_results(self, mean,error,samples,loss_history,extractedQuantity="RhoOverOmega"):
         header ="Omega "+self.extractedQuantity+"_mean "+self.extractedQuantity+"_error"
-        if samples is not None:
+        if samples is not None and error is not None:
             for i in range(len(samples)):
                 header += f" {self.extractedQuantity}_sample_{i}"
             writeData = np.column_stack((self.omega,mean,error,samples.T))
         else:
-            writeData = np.column_stack((self.omega,mean,error))
+            writeData = np.column_stack((self.omega,mean))
         np.savetxt(os.path.join(self.outputDir,self.outputFile), writeData, header=header)
 
         if self.parameterHandler.get_params()["saveParams"]:
@@ -621,7 +626,6 @@ def initializeArgumentParser(paramsDefaultDict):
 def main(paramsDefaultDict):
     parser=initializeArgumentParser(paramsDefaultDict)
     args = parser.parse_args()
-
     parameterHandler = ParameterHandler(paramsDefaultDict)
     parameterHandler.load_params(args.config,args)
 
@@ -635,10 +639,10 @@ def main(paramsDefaultDict):
     mean = results[0]
     if len(results)>1:
         samples = results[1:]
-        error = fitRunner.calculate_mean_error(samples)
+        error = fitRunner.calculate_mean_error(samples,mean,parameterHandler.get_params()["errormethod"])
     else:
         samples = None
-        error = np.zeros(len(results[0]))
+        error = None
     fitRunner.save_results(mean,error,samples,loss_histories)
 
 
@@ -660,16 +664,17 @@ paramsDefaultDict = {
     "extractedQuantity": "RhoOverOmega",
     "FiniteT_kernel": True,
     "multiFit": False,
-    "correlatorFile": None,
+    "correlatorFile": "",
     "xCol": 0,
     "meanCol": 1,
     "errorCol": 2,
     "correlatorCols": "3:",
+    "errormethod": "jackknife",
     #General Params
     "saveParams": False,
     "saveLossHistory": False,
     "verbose": False,
-    "outputFile": None,
+    "outputFile": "",
     "outputDir": ''
 
 }
@@ -679,9 +684,9 @@ paramsDefaultDict = {
 # X Multifit bootstrap
 # X implement change of network architecture
 # X choosing zeroT or FiniteT kernel
-# - always fit mean and use this to give the mean column in the output file
-# - implement both jackknife and bootstrap error estimation
-# -- calculate error from samples
+# X always fit mean and use this to give the mean column in the output file
+# X- implement both jackknife and bootstrap error estimation
+# X-- calculate error from samples
 # X width as list for adaptive network width
 # X check that training stage lists are of equal length
 # X find better name for 'which' parameter
