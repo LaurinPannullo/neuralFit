@@ -390,7 +390,7 @@ class FitRunner:
     def __init__(self, parameterHandler: ParameterHandler):
         self.parameterHandler = parameterHandler
         self.net_params = self.parameterHandler.getNetworkParams()
-
+        self.fitter = neuralFit(self.net_params)
         self.x, self.mean, self.error, self.correlators = self.extractColumns(
             self.parameterHandler.get_correlator_file(),
             self.parameterHandler.get_params()["xCol"],
@@ -398,30 +398,18 @@ class FitRunner:
             self.parameterHandler.get_params()["errorCol"],
             self.parameterHandler.get_correlator_cols()
         )
-
         self.omega = np.linspace(
             self.parameterHandler.get_params()["omega_min"],
             self.parameterHandler.get_params()["omega_max"],
             self.parameterHandler.get_params()["omega_points"]
         )
-
         self.finiteT_kernel = self.parameterHandler.get_params()["FiniteT_kernel"]
-
         self.verbose = self.parameterHandler.get_verbose()
-
         self.multiFit = self.parameterHandler.get_params()["multiFit"]
-
         self.extractedQuantity = self.parameterHandler.get_extractedQuantity()
-
-        self.Nt = self.parameterHandler.get_params()["Nt"]
-        if self.Nt == 0:
-            self.Nt = len(self.x)
-
+        self.Nt = self.parameterHandler.get_params()["Nt"] or len(self.x)
         self.outputDir = os.path.abspath(self.parameterHandler.get_params()["outputDir"])
-        if self.parameterHandler.get_params()["outputFile"] is None:
-            self.outputFile = f"{self.extractedQuantity}_{os.path.basename(self.parameterHandler.get_correlator_file())}"
-        else:
-            self.outputFile = os.path.basename(self.parameterHandler.get_params()["outputFile"])
+        self.outputFile = self.parameterHandler.get_params()["outputFile"] or f"{self.extractedQuantity}_{os.path.basename(self.parameterHandler.get_correlator_file())}"
 
     def extractColumns(self, file: str, x_col: int, mean_col: int, error_col: int, correlator_cols: List[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         data = np.loadtxt(file)
@@ -431,92 +419,49 @@ class FitRunner:
         correlator = data[:, correlator_cols]
         return x, mean, error, correlator
 
+    def run_single_fit(self, fittedQuantity, messageString ,results: List[np.ndarray], loss_histories: List[np.ndarray]) -> None:
+        start_time = time.time()
+        print("=" * 40)
+        print(messageString)
+        print("=" * 40)
+        sf, loss_history = self.fitter.fitCorrelator(
+            self.x,
+            self.error,
+            fittedQuantity,
+            self.finiteT_kernel,
+            self.Nt,
+            self.omega,
+            extractedQuantity=self.extractedQuantity,
+            verbose=self.verbose
+        )
+        if self.verbose:
+            print("-" * 40)
+            print(f"Training time: {time.time() - start_time:.2f} seconds")
+        results.append(sf)
+        loss_histories.append(loss_history)
+
     def run_fits(self) -> Tuple[np.ndarray, np.ndarray]:
-        fitter = neuralFit(self.net_params)
         results = []
         loss_histories = []
-
         if self.correlators.ndim == 1:
             self.correlators = np.array([self.correlators])
         else:
             self.correlators = self.correlators.T
-
         n_correlators = self.correlators.shape[0]
-
         if self.multiFit:
-            start_time = time.time()
-            print("=" * 40)
-            print(f"Multifitting {len(self.correlators)} correlators")
-            print("=" * 40)
-            sf, loss_history = fitter.fitCorrelator(
-                self.x,
-                self.error,
-                self.correlators,
-                self.finiteT_kernel,
-                self.Nt,
-                self.omega,
-                extractedQuantity=self.extractedQuantity,
-                verbose=self.verbose
-            )
-            if self.verbose:
-                print("=" * 40)
-                print(f"Training time: {time.time() - start_time:.2f} seconds")
-            results.append(sf)
-            loss_histories.append(loss_history)
-
+            self.run_single_fit(self.correlators, f"Multifitting {n_correlators} correlators", results, loss_histories)            
         else:
-            start_time = time.time()
-            print("=" * 40)
-            print(f"Fitting mean correlator")
-            print("=" * 40)
-            sf, loss_history = fitter.fitCorrelator(
-                self.x,
-                self.error,
-                self.mean,
-                self.finiteT_kernel,
-                self.Nt,
-                self.omega,
-                extractedQuantity=self.extractedQuantity,
-                verbose=self.verbose
-            )
-            if self.verbose:
-                print("-" * 40)
-                print(f"Training time: {time.time() - start_time:.2f} seconds")
-            results.append(sf)
-            loss_histories.append(loss_history)
-
+            self.run_single_fit(self.mean, "Fitting mean correlator", results, loss_histories)
             for i, corr in enumerate(self.correlators):
-                start_time = time.time()
-                print("=" * 40)
-                print(f"Fitting correlator sample {i + 1}/{len(self.correlators)}")
-                print("=" * 40)
-                sf, loss_history = fitter.fitCorrelator(
-                    self.x,
-                    self.error,
-                    corr,
-                    self.finiteT_kernel,
-                    self.Nt,
-                    self.omega,
-                    extractedQuantity=self.extractedQuantity,
-                    verbose=self.verbose
-                )
-                if self.verbose:
-                    print("-" * 40)
-                    print(f"Training time: {time.time() - start_time:.2f} seconds")
-                results.append(sf)
-                loss_histories.append(loss_history)
+                self.run_single_fit(corr, f"Fitting correlator sample {i + 1}/{n_correlators}", results, loss_histories)
         return np.array(results), np.array(loss_histories)
 
     def calculate_mean_error(self, mean: np.ndarray, samples: np.ndarray, errormethod: str = "jackknife") -> np.ndarray:
         N = len(samples)
-        if errormethod == "jackknife":
-            fac = N - 1
-        elif errormethod == "bootstrap":
-            fac = 1
-        else:
+        fac = N - 1 if errormethod == "jackknife" else 1
+        if errormethod not in ["jackknife", "bootstrap"]:
             raise ValueError("Invalid choice of error estimation method")
-        error = np.sqrt(fac / N * np.sum((samples - mean) ** 2, axis=0))
-        return error
+        return np.sqrt(fac / N * np.sum((samples - mean) ** 2, axis=0))
 
     def save_results(self, mean: np.ndarray, error: np.ndarray, samples: np.ndarray, loss_history: np.ndarray, extractedQuantity: str = "RhoOverOmega") -> None:
         header = "Omega " + self.extractedQuantity + "_mean"
@@ -528,10 +473,8 @@ class FitRunner:
         else:
             writeData = np.column_stack((self.omega, mean))
         np.savetxt(os.path.join(self.outputDir, self.outputFile), writeData, header=header)
-
         if self.parameterHandler.get_params()["saveParams"]:
             self.save_params(self.parameterHandler.get_params(), os.path.join(self.outputDir, self.outputFile + ".params"))
-
         if self.parameterHandler.get_params()["saveLossHistory"]:
             self.save_loss_history(loss_history, os.path.join(self.outputDir, self.outputFile + ".loss.dat"))
 
@@ -539,7 +482,8 @@ class FitRunner:
         header = "mean_total_loss mean_main_loss mean_smoothness_loss mean_l2_loss"
         for i in range(len(loss_history[1:])):
             header += f" sample_{i}_total_loss sample_{i}_main_loss sample_{i}_smoothness_loss sample_{i}_l2_loss"
-        np.savetxt(outputFile, loss_history.transpose(1, 0, 2).reshape(loss_history.shape[1], -1), header=header)
+        reshaped_loss_history = loss_history.transpose(1, 0, 2).reshape(loss_history.shape[1], -1)
+        np.savetxt(outputFile, reshaped_loss_history, header=header)
 
     def save_params(self, params: dict, outputFile: str) -> None:
         with open(outputFile + '.json', 'w') as f:
