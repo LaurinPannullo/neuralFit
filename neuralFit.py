@@ -9,7 +9,7 @@ import argparse
 import time
 import pprint
 import os
-
+from typing import List, Tuple, Callable
 
 # Define the kernel functions
 
@@ -104,48 +104,14 @@ class SpectralNN(tf.keras.Model):
 #         for layer in self.hidden_layers:
 #             x = layer(x)
 #         return self.output_layer(x)
-    
-class networkTrainer:
-    def __init__(self, model, optimizer, loss_calculator):
-        self.model = model
-        self.optimizer = optimizer
-        self.loss_calculator = loss_calculator
-    
-    def train_step(self, epoch):
-        with tf.GradientTape() as tape:
-            total_loss_value,individual_losses = self.loss_calculator.total_loss(epoch)
-
-        # Compute gradients and update weights
-        gradients = tape.gradient(total_loss_value, self.model.trainable_weights)
-        self.optimizer.apply_gradients(zip(gradients, self.model.trainable_weights))
-    
-        return total_loss_value,individual_losses
-    
-    def train(self, num_epochs,verbose=False,start_epoch=0):
-        losses = []
-        individual_losses_history = []
-        net_num_epochs = num_epochs-start_epoch
-        if verbose:
-            print(f'Training for {net_num_epochs} epochs')
-            start_time = time.time()
-        for epoch in range(start_epoch,start_epoch+num_epochs):
-            total_loss_value,individual_losses = self.train_step(epoch)
-            losses.append(total_loss_value)
-            individual_losses_history.append(individual_losses)
-            if verbose and (epoch==0 or (net_num_epochs>10 and epoch % (net_num_epochs//10) == 0)):
-                print(f'Epoch {epoch}, Loss: {total_loss_value}')
-        print(f'Epoch {epoch}, Loss: {total_loss_value}')
-        if verbose:
-            end_time = time.time()
-            print(f'Training took {end_time-start_time:.2f} seconds')
-        return losses,individual_losses_history
-
+ 
 class LossCalculator:
-    def __init__(self, model=None,y_true=None,std=None,kernel=None,
-                 delomega=None,
-                 x=None,
-                 lambda_s_func=lambda x:0.0,
-                 lambda_l2_func=lambda x:0.0,):
+    def __init__(self, model: tf.keras.Model=None,y_true:tf.Tensor=None,std=None,kernel: tf.Tensor=None,
+                 delomega: tf.Tensor =None,
+                 x:tf.Tensor=None,
+                 lambda_s_func: Callable[[int], float]=lambda x:0.0,
+                 lambda_l2_func: Callable[[int], float]=lambda x:0.0,):
+        
         self.model = model
         self.y_true = y_true
         self.x=x
@@ -161,62 +127,80 @@ class LossCalculator:
         self.lambda_l2_func = lambda_l2_func
 
 
-    def get_lambda_s(self,epoch):
+    def get_lambda_s(self, epoch: int) -> float:
         return self.lambda_s_func(epoch)
     
-    def get_lambda_l2(self,epoch):
+    def get_lambda_l2(self, epoch: int) -> float:
         return self.lambda_l2_func(epoch)
-            
     
-    def l2_regularization(self,weights=None):
+    def l2_regularization(self, weights: List[tf.Tensor] = None) -> tf.Tensor:
         if weights is None:
             weights = self.model.trainable_weights
-        return tf.reduce_sum([tf.reduce_sum(tf.square(w)) for w in weights])
+        return tf.reduce_sum([tf.nn.l2_loss(w) for w in weights])
     
-    def smoothness_loss(self,rho=None):
+    def smoothness_loss(self, rho: tf.Tensor = None) -> tf.Tensor:
         if rho is None:
-            rho=self.model(self.x)
-        diff = rho[:, 1:] - rho[:, :-1]
-        return tf.reduce_sum(tf.square(diff))
+            rho = self.model(self.x)
+        return tf.reduce_sum(tf.square(rho[:, 1:] - rho[:, :-1]))
     
-    def custom_loss(self, y_pred,y_true=None):
+    def custom_loss(self, y_pred: tf.Tensor, y_true: tf.Tensor = None) -> tf.Tensor:
         if y_true is None:
             y_true = self.y_true
-
-        # Ensure both y_true and y_pred are of type float32
         weighting = tf.cast(self.std, dtype=tf.float32)
         weighting /= weighting.numpy()[0]
         y_true = tf.cast(y_true, dtype=tf.float32)
         y_pred = tf.cast(y_pred, dtype=tf.float32)
-
         chi_squared = tf.square((y_true - y_pred) / weighting)
-        chi_squared = tf.reduce_mean(chi_squared)
+        return tf.reduce_mean(chi_squared)
     
-        return chi_squared  # Chi-squared loss
-
-    def total_loss(self,epoch,y_pred=None,rho=None,y_true=None):
+    def total_loss(self, epoch: int, y_pred: tf.Tensor = None, rho: tf.Tensor = None, y_true: tf.Tensor = None) -> Tuple[tf.Tensor, List[tf.Tensor]]:
         if rho is None:
-            rho=self.model(self.x)
+            rho = self.model(self.x)
         if y_pred is None:
             y_pred = Di(self.kernel, rho, self.delomega)
         if y_true is None:
             y_true = self.y_true
-
-        # Smoothness loss
-        smooth_loss = self.smoothness_loss(rho)
-        
-        # L2 loss (regularization on the network weights)
-        l2_loss = self.l2_regularization(self.model.trainable_weights)
-
-
-        #main_loss
         main_loss = self.custom_loss(y_pred, y_true)
-        
-        # Total loss = main loss + smoothness regularizer + L2 regularization
-        total_loss = main_loss + self.get_lambda_s(epoch) * smooth_loss + (self.get_lambda_l2(epoch) * l2_loss)*0.5
-        return total_loss,[total_loss,main_loss,self.get_lambda_s(epoch) *smooth_loss,self.get_lambda_l2(epoch) *l2_loss*0.5]
-
+        smooth_loss = self.smoothness_loss(rho)
+        l2_loss = self.l2_regularization()
+        total_loss_value = main_loss + self.get_lambda_s(epoch) * smooth_loss + self.get_lambda_l2(epoch) * l2_loss
+        return total_loss_value, [main_loss, self.get_lambda_s(epoch)*smooth_loss, self.get_lambda_l2(epoch)*l2_loss]
     
+   
+class networkTrainer:
+    def __init__(self, model: tf.keras.Model, optimizer: tf.keras.optimizers.Optimizer, loss_calculator: LossCalculator):
+        self.model = model
+        self.optimizer = optimizer
+        self.loss_calculator = loss_calculator
+    
+    def train_step(self, epoch: int) -> Tuple[tf.Tensor, List[tf.Tensor]]:
+        with tf.GradientTape() as tape:
+            total_loss_value, individual_losses = self.loss_calculator.total_loss(epoch)
+
+        # Compute gradients and update weights
+        gradients = tape.gradient(total_loss_value, self.model.trainable_weights)
+        self.optimizer.apply_gradients(zip(gradients, self.model.trainable_weights))
+    
+        return total_loss_value, individual_losses
+    
+    def train(self, num_epochs: int, verbose: bool = False, start_epoch: int = 0) -> Tuple[List[tf.Tensor], List[List[tf.Tensor]]]:
+        losses = []
+        individual_losses_history = []
+        net_num_epochs = num_epochs - start_epoch
+        if verbose:
+            print(f'Training for {net_num_epochs} epochs')
+            start_time = time.time()
+        for epoch in range(start_epoch, start_epoch + num_epochs):
+            total_loss_value, individual_losses = self.train_step(epoch)
+            losses.append(total_loss_value)
+            individual_losses_history.append(individual_losses)
+            if verbose and (epoch == 0 or (net_num_epochs > 10 and epoch % (net_num_epochs // 10) == 0)):
+                print(f'Epoch {epoch}, Loss: {total_loss_value}')
+        print(f'Epoch {epoch}, Loss: {total_loss_value}')
+        if verbose:
+            end_time = time.time()
+            print(f'Training took {end_time - start_time:.2f} seconds')
+        return losses, individual_losses_history
 
 # Interface and runner classes
 
@@ -279,63 +263,61 @@ class neuralFit:
             raise ValueError("Invalid choice spectral function target")
         return kernel
 
-    def fitCorrelator(self,x,error,correlator,finiteT_kernel,Nt,omega,extractedQuantity="RhoOverOmega",verbose=True):
+    def fitCorrelator(self, x: np.ndarray, error: np.ndarray, correlator: np.ndarray, finiteT_kernel: bool, Nt: int, omega: np.ndarray, extractedQuantity: str = "RhoOverOmega", verbose: bool = True) -> Tuple[np.ndarray, np.ndarray]:
 
-        kernel=self.initKernel(extractedQuantity,finiteT_kernel,Nt,x,omega)
-        del_omega=omega[1]-omega[0]
-        # pprint.pprint(kernel[1])
+        kernel = self.initKernel(extractedQuantity, finiteT_kernel, Nt, x, omega)
+        del_omega = omega[1] - omega[0]
 
         if self.errorWeighting:
-            errorWeight=error
+            errorWeight = error
         else:
-            errorWeight=np.ones(len(x))
+            errorWeight = np.ones(len(x))
 
-        constant_input = tf.constant([[1.0]], dtype=tf.float32) #NN
+        constant_input = tf.constant([[1.0]], dtype=tf.float32)  # NN
 
         if self.networkStructure == "SpectralNN":
             model = SpectralNN(num_output_nodes=len(omega), width=self.width)
-        # elif self.networkStructure == "SpectralNNP2P":
-        #     model = SpectralNNP2P(width=self.width)
         else:
             raise ValueError("Invalid choice of network")
-        target_output=correlator
-        lossCalc=LossCalculator(model=model,
-                                            y_true=target_output,
-                                            kernel=kernel,
-                                            delomega=del_omega,
-                                            x=constant_input,
-                                            std=errorWeight,
-                                            lambda_s_func=lambda x:self.lambda_s[0],
-                                            lambda_l2_func=lambda x:self.lambda_l2[0]
-                                            )
 
-        optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate[0])
-        trainer=networkTrainer(model,optimizer,lossCalc)
-        # total_loss_history,loss_history=trainer.train(self.epochs[0],warmup=True,verbose=verbose)
-        total_loss_history=[]
-        loss_history=[]
+        target_output = correlator
+        lossCalc = LossCalculator(
+            model=model,
+            y_true=target_output,
+            kernel=kernel,
+            delomega=del_omega,
+            x=constant_input,
+            std=errorWeight,
+            lambda_s_func=lambda x: self.lambda_s[0],
+            lambda_l2_func=lambda x: self.lambda_l2[0]
+        )
 
-        for lambda_s,lambda_l2,learning_rate,epochs in zip(self.lambda_s,self.lambda_l2,self.learning_rate,self.epochs):
-            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate)
-            lossCalc.lambda_s_func=lambda x:lambda_s
-            lossCalc.lambda_l2_func=lambda x:lambda_l2
-            trainer.optimizer=optimizer
-            total_loss_history_tmp,loss_history_tmp=trainer.train(epochs,verbose=verbose)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate[0])
+        trainer = networkTrainer(model, optimizer, lossCalc)
+
+        total_loss_history = []
+        loss_history = []
+
+        for lambda_s, lambda_l2, learning_rate, epochs in zip(self.lambda_s, self.lambda_l2, self.learning_rate, self.epochs):
+            optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+            lossCalc.lambda_s_func = lambda x: lambda_s
+            lossCalc.lambda_l2_func = lambda x: lambda_l2
+            trainer.optimizer = optimizer
+            total_loss_history_tmp, loss_history_tmp = trainer.train(epochs, verbose=verbose)
             total_loss_history.extend(total_loss_history_tmp)
             loss_history.extend(loss_history_tmp)
             if verbose:
-                print("-"*40)
+                print("-" * 40)
 
-
-        spectralFunction=model(constant_input)
-        return np.squeeze(spectralFunction),np.squeeze(loss_history)
+        spectralFunction = model(constant_input)
+        return np.squeeze(spectralFunction), np.squeeze(loss_history)
    
 class ParameterHandler:
-    def __init__(self, paramsDefaultDict):
+    def __init__(self, paramsDefaultDict: dict):
         self.allowed_params = paramsDefaultDict.keys()
         self.params = paramsDefaultDict
 
-    def load_from_json(self, config_path):
+    def load_from_json(self, config_path: str) -> None:
         if config_path == "":
             return
         else:
@@ -345,32 +327,32 @@ class ParameterHandler:
                 if name in data:
                     self.params[name] = data[name]
 
-    def override_with_args(self, args):
+    def override_with_args(self, args: argparse.Namespace) -> None:
         for name in self.allowed_params:
             val = getattr(args, name, None)
             if val is not None:
                 self.params[name] = val
 
-    def check_parameters(self):
+    def check_parameters(self) -> None:
         for name in self.allowed_params:
             if name == "outputFile" and self.params[name] is None:
-              continue
+                continue
             elif name not in self.params or self.params[name] is None:
                 raise ValueError(f"Parameter '{name}' is not set.")
 
-    def load_params(self, config_path,args):
+    def load_params(self, config_path: str, args: argparse.Namespace) -> None:
         self.load_from_json(config_path)
         self.override_with_args(args)
         self.check_parameters()
 
-    def get_params(self):
+    def get_params(self) -> dict:
         return self.params
     
-    def get_width(self):
+    def get_width(self) -> List[int]:
         width = self.params["width"]
         return [width] if isinstance(width, int) else width
     
-    def getNetworkParams(self):
+    def getNetworkParams(self) -> networkParameters:
         return networkParameters(
             lambda_s=self.params["lambda_s"],
             lambda_l2=self.params["lambda_l2"],
@@ -381,21 +363,20 @@ class ParameterHandler:
             networkStructure=self.params["networkStructure"]
         )
     
-    def get_extractedQuantity(self):
+    def get_extractedQuantity(self) -> str:
         return self.params["extractedQuantity"]
     
-    def get_correlator_file(self):
+    def get_correlator_file(self) -> str:
         return os.path.abspath(self.params["correlatorFile"])
     
-
-    def get_verbose(self):
+    def get_verbose(self) -> bool:
         return self.params["verbose"]
 
-    def get_correlator_cols(self):
+    def get_correlator_cols(self) -> List[int]:
         correlator_cols = self.params["correlatorCols"]
         if isinstance(correlator_cols, list):
             return correlator_cols
-        elif isinstance(correlator_cols,int):
+        elif isinstance(correlator_cols, int):
             return [correlator_cols]
         elif isinstance(correlator_cols, str) and ':' in correlator_cols:
             start_str, end_str = correlator_cols.split(':')
@@ -407,10 +388,10 @@ class ParameterHandler:
         elif (isinstance(correlator_cols, str) and correlator_cols == '') or correlator_cols is None:
             return []
         else:
-            raise ValueError("correlator_cols must be a integer index or list of indices or a string with a range (e.g., '6:10', '6:', ':10', ':').")   
+            raise ValueError("correlator_cols must be an integer index, list of indices, or a string with a range (e.g., '6:10', '6:', ':10', ':').")
 class FitRunner:
-    def __init__(self, parameterHandler):
-        self.parameterHandler=parameterHandler
+    def __init__(self, parameterHandler: ParameterHandler):
+        self.parameterHandler = parameterHandler
         self.net_params = self.parameterHandler.getNetworkParams()
 
         self.x, self.mean, self.error, self.correlators = self.extractColumns(
@@ -419,7 +400,7 @@ class FitRunner:
             self.parameterHandler.get_params()["meanCol"],
             self.parameterHandler.get_params()["errorCol"],
             self.parameterHandler.get_correlator_cols()
-            )
+        )
 
         self.omega = np.linspace(
             self.parameterHandler.get_params()["omega_min"],
@@ -427,7 +408,7 @@ class FitRunner:
             self.parameterHandler.get_params()["omega_points"]
         )
 
-        self.finiteT_kernel=self.parameterHandler.get_params()["FiniteT_kernel"]
+        self.finiteT_kernel = self.parameterHandler.get_params()["FiniteT_kernel"]
 
         self.verbose = self.parameterHandler.get_verbose()
 
@@ -436,18 +417,16 @@ class FitRunner:
         self.extractedQuantity = self.parameterHandler.get_extractedQuantity()
 
         self.Nt = self.parameterHandler.get_params()["Nt"]
-        if self.Nt==0:
-            self.Nt=len(self.x)
+        if self.Nt == 0:
+            self.Nt = len(self.x)
 
         self.outputDir = os.path.abspath(self.parameterHandler.get_params()["outputDir"])
         if self.parameterHandler.get_params()["outputFile"] is None:
-            self.outputFile = f"{self.extractedQuantity}_{os.path.basename(self.parameterHandler.get_correlator_file())}" 
+            self.outputFile = f"{self.extractedQuantity}_{os.path.basename(self.parameterHandler.get_correlator_file())}"
         else:
             self.outputFile = os.path.basename(self.parameterHandler.get_params()["outputFile"])
 
-        
-    
-    def extractColumns(self, file, x_col, mean_col, error_col, correlator_cols):
+    def extractColumns(self, file: str, x_col: int, mean_col: int, error_col: int, correlator_cols: List[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         data = np.loadtxt(file)
         x = data[:, x_col]
         mean = data[:, mean_col]
@@ -455,7 +434,7 @@ class FitRunner:
         correlator = data[:, correlator_cols]
         return x, mean, error, correlator
 
-    def run_fits(self):
+    def run_fits(self) -> Tuple[np.ndarray, np.ndarray]:
         fitter = neuralFit(self.net_params)
         results = []
         loss_histories = []
@@ -464,16 +443,15 @@ class FitRunner:
             self.correlators = np.array([self.correlators])
         else:
             self.correlators = self.correlators.T
-        
 
         n_correlators = self.correlators.shape[0]
-        
+
         if self.multiFit:
             start_time = time.time()
-            print("="*40)
+            print("=" * 40)
             print(f"Multifitting {len(self.correlators)} correlators")
-            print("="*40)
-            sf,loss_history = fitter.fitCorrelator(
+            print("=" * 40)
+            sf, loss_history = fitter.fitCorrelator(
                 self.x,
                 self.error,
                 self.correlators,
@@ -482,19 +460,19 @@ class FitRunner:
                 self.omega,
                 extractedQuantity=self.extractedQuantity,
                 verbose=self.verbose
-            )                 
+            )
             if self.verbose:
-                print("="*40)
-                print(f"Training time: {time.time()-start_time:.2f} seconds")
+                print("=" * 40)
+                print(f"Training time: {time.time() - start_time:.2f} seconds")
             results.append(sf)
             loss_histories.append(loss_history)
 
         else:
             start_time = time.time()
-            print("="*40)
+            print("=" * 40)
             print(f"Fitting mean correlator")
-            print("="*40)
-            sf,loss_history = fitter.fitCorrelator(
+            print("=" * 40)
+            sf, loss_history = fitter.fitCorrelator(
                 self.x,
                 self.error,
                 self.mean,
@@ -503,19 +481,19 @@ class FitRunner:
                 self.omega,
                 extractedQuantity=self.extractedQuantity,
                 verbose=self.verbose
-            )                 
+            )
             if self.verbose:
-                print("-"*40)
-                print(f"Training time: {time.time()-start_time:.2f} seconds")
+                print("-" * 40)
+                print(f"Training time: {time.time() - start_time:.2f} seconds")
             results.append(sf)
             loss_histories.append(loss_history)
 
-            for i,corr in enumerate(self.correlators):
+            for i, corr in enumerate(self.correlators):
                 start_time = time.time()
-                print("="*40)
-                print(f"Fitting correlator sample {i+1}/{len(self.correlators)}")
-                print("="*40)
-                sf,loss_history = fitter.fitCorrelator(
+                print("=" * 40)
+                print(f"Fitting correlator sample {i + 1}/{len(self.correlators)}")
+                print("=" * 40)
+                sf, loss_history = fitter.fitCorrelator(
                     self.x,
                     self.error,
                     corr,
@@ -524,53 +502,53 @@ class FitRunner:
                     self.omega,
                     extractedQuantity=self.extractedQuantity,
                     verbose=self.verbose
-                )                 
+                )
                 if self.verbose:
-                    print("-"*40)
-                    print(f"Training time: {time.time()-start_time:.2f} seconds")
+                    print("-" * 40)
+                    print(f"Training time: {time.time() - start_time:.2f} seconds")
                 results.append(sf)
                 loss_histories.append(loss_history)
-        return np.array(results),np.array(loss_histories)
-    
-    def calculate_mean_error(self, mean, samples, errormethod="jackknife"):
-        N=len(samples)
-        if errormethod=="jackknife":
-            fac=N-1
-        elif errormethod=="bootstrap":
-            fac=1
+        return np.array(results), np.array(loss_histories)
+
+    def calculate_mean_error(self, mean: np.ndarray, samples: np.ndarray, errormethod: str = "jackknife") -> np.ndarray:
+        N = len(samples)
+        if errormethod == "jackknife":
+            fac = N - 1
+        elif errormethod == "bootstrap":
+            fac = 1
         else:
             raise ValueError("Invalid choice of error estimation method")
-        error=np.sqrt(fac/N*np.sum((samples-mean)**2,axis=0))
+        error = np.sqrt(fac / N * np.sum((samples - mean) ** 2, axis=0))
         return error
-    
-    def save_results(self, mean,error,samples,loss_history,extractedQuantity="RhoOverOmega"):
-        header ="Omega "+self.extractedQuantity+"_mean"
+
+    def save_results(self, mean: np.ndarray, error: np.ndarray, samples: np.ndarray, loss_history: np.ndarray, extractedQuantity: str = "RhoOverOmega") -> None:
+        header = "Omega " + self.extractedQuantity + "_mean"
         if samples is not None and error is not None:
             header += f" {self.extractedQuantity}_error"
             for i in range(len(samples)):
                 header += f" {self.extractedQuantity}_sample_{i}"
-            writeData = np.column_stack((self.omega,mean,error,samples.T))
+            writeData = np.column_stack((self.omega, mean, error, samples.T))
         else:
-            writeData = np.column_stack((self.omega,mean))
-        np.savetxt(os.path.join(self.outputDir,self.outputFile), writeData, header=header)
+            writeData = np.column_stack((self.omega, mean))
+        np.savetxt(os.path.join(self.outputDir, self.outputFile), writeData, header=header)
 
         if self.parameterHandler.get_params()["saveParams"]:
-            self.save_params(self.parameterHandler.get_params(),os.path.join(self.outputDir,self.outputFile+".params"))
-        
+            self.save_params(self.parameterHandler.get_params(), os.path.join(self.outputDir, self.outputFile + ".params"))
+
         if self.parameterHandler.get_params()["saveLossHistory"]:
-            self.save_loss_history(loss_history,os.path.join(self.outputDir,self.outputFile+".loss.dat"))
-    
-    def save_loss_history(self, loss_history, outputFile):
-        header ="mean_total_loss mean_main_loss mean_smoothness_loss mean_l2_loss"
+            self.save_loss_history(loss_history, os.path.join(self.outputDir, self.outputFile + ".loss.dat"))
+
+    def save_loss_history(self, loss_history: np.ndarray, outputFile: str) -> None:
+        header = "mean_total_loss mean_main_loss mean_smoothness_loss mean_l2_loss"
         for i in range(len(loss_history[1:])):
             header += f" sample_{i}_total_loss sample_{i}_main_loss sample_{i}_smoothness_loss sample_{i}_l2_loss"
-        np.savetxt(outputFile, loss_history.transpose(1,0,2).reshape(loss_history.shape[1],-1), header=header)
-    
-    def save_params(self, params, outputFile):
-        with open(outputFile+'.json', 'w') as f:
+        np.savetxt(outputFile, loss_history.transpose(1, 0, 2).reshape(loss_history.shape[1], -1), header=header)
+
+    def save_params(self, params: dict, outputFile: str) -> None:
+        with open(outputFile + '.json', 'w') as f:
             json.dump(params, f, indent=4)
     
-def initializeArgumentParser(paramsDefaultDict):
+def initializeArgumentParser(paramsDefaultDict: dict) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="neuralFit",
         description="Fit spectral functions to provided correlators using a neural network."
