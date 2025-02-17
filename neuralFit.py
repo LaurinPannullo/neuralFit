@@ -33,8 +33,6 @@ def KL_kernel_Position_FiniteT(Position, Omega,T):
         #set all other nan entries to 0
         ker[np.isnan(ker)] = 0
 
-        # ker[(Position%1/T==0)]=1
-        # ker[(Position[:,0]!=0)]=0
     return ker
 
 def KL_kernel_Omega(KL,x,Omega,args=[]):
@@ -257,12 +255,7 @@ class neuralFit:
 
         kernel = self.initKernel(extractedQuantity, finiteT_kernel, Nt, x, omega)
         del_omega = omega[1] - omega[0]
-
-        if self.errorWeighting:
-            errorWeight = error
-        else:
-            errorWeight = np.ones(len(x))
-
+        errorWeight = error if self.errorWeighting else np.ones(len(x))
         constant_input = tf.constant([[1.0]], dtype=tf.float32)  # NN
 
         if self.networkStructure == "SpectralNN":
@@ -284,10 +277,8 @@ class neuralFit:
 
         optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate[0])
         trainer = networkTrainer(model, optimizer, lossCalc)
-
         total_loss_history = []
         loss_history = []
-
         for lambda_s, lambda_l2, learning_rate, epochs in zip(self.lambda_s, self.lambda_l2, self.learning_rate, self.epochs):
             optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
             lossCalc.lambda_s_func = lambda x: lambda_s
@@ -298,7 +289,6 @@ class neuralFit:
             loss_history.extend(loss_history_tmp)
             if verbose:
                 print("-" * 40)
-
         spectralFunction = model(constant_input)
         return np.squeeze(spectralFunction), np.squeeze(loss_history)
    
@@ -567,29 +557,6 @@ paramsDefaultDict = {
 }
 
 
-#TODOs
-# X Multifit bootstrap
-# X implement change of network architecture
-# X choosing zeroT or FiniteT kernel
-# X always fit mean and use this to give the mean column in the output file
-# X- implement both jackknife and bootstrap error estimation
-# X-- calculate error from samples
-# X width as list for adaptive network width
-# X check that training stage lists are of equal length
-# X find better name for 'which' parameter
-# X Nt as explicit parameter
-# X make such that correlatorfile and outputfile can handle relative paths
-# X way to save loss history
-# X way to save parameters
-# - check parameter handling and checking
-# - implement error handling
-# X merge verything into one file
-# - make documentation
-# -- file parameters can be relative, but relative to cwd
-# -- also some part about tensorflow installation and python virtual environments
-# ----------------
-# - make momentum kernel accesible
-# - implement multiprocessing
-# - implement not only error weighting but correlator mean value weighting
+
 if __name__ == "__main__":
     main(paramsDefaultDict)
