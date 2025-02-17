@@ -107,7 +107,7 @@ The following parameters can be specified in the JSON file or as command line ar
 | **xCol**             | `0`              | Any integer                       | Specifies the column of the input file that contains the $x$ values (or $\tau$ values). |
 | **meanCol**          | `1`              | Any integer                       | Specifies the column of the input file that contains the mean correlator |
 | **errorCol**         | `2`              | Any integer                       | Specifies the column of the input file that contains the error of the correlator |
-| **correlatorCols**   | `"3:"`           | Integer, List of integers or range string | Specifies the columns of the input file that contain the statistical samples of the correlator. Several formats can be used. One integer specifies a single column, a list of integers specifies multiple columns, and a range string specifies a range of columns. The range string should be in the format `start:end` where `start` and `end` are integers. The range is inclusive. Optionally `start` or `end` can be empty to include all columns from the start or to the end. |
+| **correlatorCols**   | `"3:"`           | Integer, List of integers or range string | Specifies the columns of the input file that contain the statistical samples of the correlator. Several formats can be used. One integer specifies a single column, a list of integers specifies multiple columns, and a range string specifies a range of columns. The range string should be in the format `start:end` where `start` and `end` are integers. The range is inclusive. Optionally `start` or `end` can be empty to include all columns from the start or to the end. If set to `""`, no statistical samples are used to calculate the error and no error is column is given in the output. |
 | **errormethod**      | `"jackknife"`    | `"jackknife"`, `"bootstrap"`      | The error method to use for the correlator. Can be either jackknife or bootstrap |
 | **saveParams**       | `False`          | `True`, `False`                   | Save the parameters used for the training to a file |
 | **saveLossHistory**  | `False`          | `True`, `False`                   | Save the loss history to a file |
@@ -130,6 +130,7 @@ Create a JSON file (e.g., `params.json`):
     "learning_rate": [1e-3,1e-4,1e-5],
     "errorWeighting": true,
     "networkStructure": "SpectralNN",
+    "width": [32,32,32],
     "omega_min": 0,
     "omega_max": 10,
     "omega_points": 500,
@@ -141,7 +142,7 @@ Create a JSON file (e.g., `params.json`):
     "xCol": 0,
     "meanCol": 1,
     "errorCol": 2,
-    "correlatorCols": "",
+    "correlatorCols": "3:",
     "errormethod": "jackknife",
     "saveParams": true,
     "saveLossHistory": true,
@@ -150,6 +151,9 @@ Create a JSON file (e.g., `params.json`):
     "outputDir": ""
 }
 ```
+
+
+
 Run the program with the JSON file:
 ```bash
 python neuralFit.py --config params.json
@@ -160,3 +164,13 @@ Run the program with command line arguments:
 ```bash
 python neuralFit.py --config params.json --lambda_s 1e-6 3.55323189e-05 3.55323189e-05 --lambda_l2 1e-4 6.66754659e-08 6.66754659e-08 --epochs 2000 90000 10000 --learning_rate 1e-3 1e-4 1e-5 --errorWeighting true --networkStructure SpectralNN --omega_min 0 --omega_max 10 --omega_points 500 --Nt 16 --extractedQuantity RhoOverOmega --FiniteT_kernel true --multiFit false --correlatorFile correlator.txt --xCol 0 --meanCol 1 --errorCol 2 --correlatorCols "" --errormethod jackknife --saveParams true --saveLossHistory true --verbose true --outputFile null --outputDir ""
 ```
+
+## Needed Libraries
+
+The following non-standard libraries are needed to run the program:
+- `numpy`
+- `tensorflow`
+
+### Hints on the installation of TensorFlow
+
+https://www.tensorflow.org/install
