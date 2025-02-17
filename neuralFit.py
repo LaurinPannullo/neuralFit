@@ -99,23 +99,23 @@ class SpectralNN(tf.keras.Model):
         output = self.output_layer(x)  # Shape [500]
         return output
 
-class SpectralNNP2P(tf.keras.Model):
-    def __init__(self, num_output_nodes, width=[32]):
-        super(SpectralNNP2P, self).__init__()
+# class SpectralNNP2P(tf.keras.Model):
+#     def __init__(self, width=[32]):
+#         super(SpectralNNP2P, self).__init__()
 
-        # Create hidden layers
-        self.hidden_layers = []
-        for w in width:
-            self.hidden_layers.append(tf.keras.layers.Dense(w, activation='elu'))
+#         # Create hidden layers
+#         self.hidden_layers = []
+#         for w in width:
+#             self.hidden_layers.append(tf.keras.layers.Dense(w, activation='elu'))
         
-        # Output layer that produces one output per frequency (500 outputs)
-        self.output_layer = tf.keras.layers.Dense(1, activation='softplus')
+#         # Output layer that produces one output per frequency (500 outputs)
+#         self.output_layer = tf.keras.layers.Dense(1, activation='softplus')
     
-    def call(self, inputs):
-        x = inputs
-        for layer in self.hidden_layers:
-            x = layer(x)
-        return self.output_layer(x)
+#     def call(self, inputs):
+#         x = inputs
+#         for layer in self.hidden_layers:
+#             x = layer(x)
+#         return self.output_layer(x)
     
 class networkTrainer:
     def __init__(self, model, optimizer, loss_calculator):
@@ -321,8 +321,8 @@ class neuralFit:
 
         if self.networkStructure == "SpectralNN":
             model = SpectralNN(num_output_nodes=len(omega), width=self.width)
-        elif self.networkStructure == "SpectralNNP2P":
-            model = SpectralNNP2P(num_output_nodes=len(omega), width=self.width, lambda_s=self.lambda_s[0], lambda_l2=self.lambda_l2[0], kl_ker=kernel, del_omega=del_omega, gauss_width=errorWeight)
+        # elif self.networkStructure == "SpectralNNP2P":
+        #     model = SpectralNNP2P(width=self.width)
         else:
             raise ValueError("Invalid choice of network")
         target_output=correlator
@@ -363,11 +363,14 @@ class ParameterHandler:
         self.params = paramsDefaultDict
 
     def load_from_json(self, config_path):
-        with open(config_path, 'r') as f:
-            data = json.load(f)
-        for name in self.allowed_params:
-            if name in data:
-                self.params[name] = data[name]
+        if config_path == "":
+            return
+        else:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+            for name in self.allowed_params:
+                if name in data:
+                    self.params[name] = data[name]
 
     def override_with_args(self, args):
         for name in self.allowed_params:
@@ -601,7 +604,8 @@ def initializeArgumentParser(paramsDefaultDict):
     parser.add_argument(
         "--config",
         type=str,
-        required=True,
+        required=False,
+        default="",
         help="Path to JSON configuration file"
     )
     
