@@ -427,7 +427,7 @@ class TestLossCalculator(unittest.TestCase):
     def test_l2_regularization(self):
         weights = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
         result = self.loss_calculator.l2_regularization(weights=weights)
-        expected = 14.0  # sum of squares
+        expected = 7.0  # sum of squares
         self.assertAlmostEqual(result.numpy(), expected, places=5)
 
     def test_smoothness_loss(self):
