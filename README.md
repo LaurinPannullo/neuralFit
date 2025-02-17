@@ -1,4 +1,4 @@
-# Usage Documentation
+# neuralFit
 
 ## Overview
 
@@ -27,27 +27,21 @@ The loss function is a sum of the following terms:
 #### Correlator loss
 This term penalizes the difference between the output of the neural network and the input correlator. The coupling for this term has a constant value of `1`.
 The correlator loss is defined as
-$$
-\text{Correlator loss} = \sum_{i=1} \left( \frac{1}{\sigma_i} \left( D(x_i) - D_{\text{input}}(x_i) \right)^2 \right),
-$$
+$$\text{Correlator loss} = \sum_{i=1} \left( \frac{1}{\sigma_i} \left( D(x_i) - D_{\text{input}}(x_i) \right)^2 \right),$$
 where $D(x_i)$ is the output of the neural network, $D_{\text{input}}(x_i)$ is the input correlator, and $\sigma_i$ is the error of the input correlator.
 If the parameter `errorWeighting` is set to `False`, $\sigma_i = 1$.
 
 #### Smoothness loss
 This term penalizes a non-smooth spectral function. The coupling for this term can be specified using the `lambda_s` parameter.
 The smoothness loss is defined as
-$$
-\text{Smoothness loss} = \lambda_s \sum_{i=1} (\rho(\omega_{i+1}) - \rho(\omega_i))^2,
-$$
+$$\text{Smoothness loss} = \lambda_s \sum_{i=1} (\rho(\omega_{i+1}) - \rho(\omega_i))^2,$$
 where $\lambda_s$ is the coupling for the smoothness loss contribution.
 
 
 #### L2 loss
 This term penalizes large weights in the network and is meant to combat overfitting . The coupling for this term can be specified using the `lambda_l2` parameter.
 The L2 loss is defined as
-$$
-\text{L2 loss} = \lambda_{l_2} \sum_{i} w_i^2,
-$$
+$$\text{L2 loss} = \lambda_{l_2} \sum_{i} w_i^2,$$
 where $\lambda_{l2}$ is the coupling for the L2 loss contribution and $w$ are the weights of the network.
 
 
