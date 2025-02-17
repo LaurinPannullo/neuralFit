@@ -219,8 +219,10 @@ class LossCalculator:
         return self.lambda_l2_func(epoch)
             
     
-    def l2_regularization(self):
-        return self.l2_regularization(self.model.trainable_weights)
+    def l2_regularization(self,weights=None):
+        if weights is None:
+            weights = self.model.trainable_weights
+        return self.l2_regularization(weights)
     
     def smoothness_loss(self,rho=None):
         if rho is None:
