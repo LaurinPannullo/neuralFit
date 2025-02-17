@@ -66,26 +66,16 @@ def Di(KL, rhoi, delomega):
 
 
 class SpectralNN(tf.keras.Model):
-    def __init__(self, num_output_nodes, width=[32]):
+    def __init__(self, num_output_nodes: int, width: List[int]):
         super(SpectralNN, self).__init__()
-        
-        # Create hidden layers
-        self.hidden_layers = []
-        for w in width:
-            self.hidden_layers.append(tf.keras.layers.Dense(w, activation='elu', use_bias=False))
-        
-        # Output layer (softplus activation to ensure positive definiteness)
-        self.output_layer = tf.keras.layers.Dense(num_output_nodes, activation=tf.keras.activations.softplus, use_bias=False)  # Shape [500]
-    
-    def call(self, inputs):
-        # Forward pass through hidden layers
+        self.hidden_layers = [tf.keras.layers.Dense(w, activation='elu', use_bias=False) for w in width]
+        self.output_layer = tf.keras.layers.Dense(num_output_nodes, activation=tf.keras.activations.softplus, use_bias=False)
+
+    def call(self, inputs: tf.Tensor) -> tf.Tensor:
         x = inputs
         for layer in self.hidden_layers:
             x = layer(x)
-        
-        # Output layer (representing rho(omega))
-        output = self.output_layer(x)  # Shape [500]
-        return output
+        return self.output_layer(x)
 
 # class SpectralNNP2P(tf.keras.Model):
 #     def __init__(self, width=[32]):
