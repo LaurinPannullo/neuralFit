@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 import tensorflow as tf
 import keras
-from neuralFit import KL_kernel_Momentum, KL_kernel_Position_Vacuum, KL_kernel_Position_FiniteT, KL_kernel_Omega, Di, SpectralNN, networkTrainer, LossCalculator, networkParameters, ParameterHandler, FitRunner, networkTrainer, l2_regularization
+from neuralFit import KL_kernel_Momentum, KL_kernel_Position_Vacuum, KL_kernel_Position_FiniteT, KL_kernel_Omega, Di, SpectralNN, networkTrainer, LossCalculator, networkParameters, ParameterHandler, FitRunner, networkTrainer
 import os
 import json
 class TestKernels(unittest.TestCase):
@@ -247,9 +247,17 @@ class TestParameterHandler(unittest.TestCase):
             "outputDir": ''
         }
         self.parameterHandler = ParameterHandler(self.paramsDefaultDict)
-        # jsonFileName = "test_config.json"
-        # with open(jsonFileName, "w") as jsonFile:
-        #     json.dump(self.paramsDefaultDict, jsonFile)
+        self.data=np.array([
+                        [0.0, 1.0, 0.1, 0.5],
+                        [0.1, 1.1, 0.1, 0.6],
+                        [0.2, 1.2, 0.1, 0.7]
+                    ])
+        self.correlatorFilename = "test_correlator.txt"
+        np.savetxt(self.correlatorFilename, self.data)
+
+    def tearDown(self):
+        os.remove(self.correlatorFilename)
+        return super().tearDown()
 
     def test_load_from_json(self):
         config = {
@@ -418,7 +426,7 @@ class TestLossCalculator(unittest.TestCase):
 
     def test_l2_regularization(self):
         weights = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
-        result = l2_regularization(weights=weights)
+        result = self.loss_calculator.l2_regularization(weights=weights)
         expected = 14.0  # sum of squares
         self.assertAlmostEqual(result.numpy(), expected, places=5)
 

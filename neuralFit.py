@@ -155,41 +155,7 @@ class networkTrainer:
 # loss calculator classes and functions
 # partially former content of lossCalculator.py
 
-def l2_regularization( weights):
-    return tf.reduce_sum([tf.reduce_sum(tf.square(w)) for w in weights])
 
-def smoothness_loss(rho):
-    diff = rho[:, 1:] - rho[:, :-1]
-    return tf.reduce_sum(tf.square(diff))
-    
-def custom_loss( y_pred, y_true,std):
-    # Ensure both y_true and y_pred are of type float32
-    std = tf.cast(std, dtype=tf.float32)
-    std = std/std.numpy()[0]
-    y_true = tf.cast(y_true, dtype=tf.float32)
-    y_pred = tf.cast(y_pred, dtype=tf.float32)
-
-    chi_squared = tf.square((y_true - y_pred) / std)
-    chi_squared = tf.reduce_mean(chi_squared)
-   
-    return chi_squared  # Chi-squared loss
-
-def total_loss(y_pred, y_true=None, std=None, rho=None, model=None,
-                lambda_s=None, lambda_l2=None):
-
-    # Smoothness loss
-    smooth_loss = smoothness_loss(rho)
-    
-    # L2 loss (regularization on the network weights)
-    l2_loss = l2_regularization(model.trainable_weights)
-
-
-    #main_loss
-    main_loss = custom_loss(y_pred, y_true,std)
-    
-    # Total loss = main loss + smoothness regularizer + L2 regularization
-    total_loss = main_loss + lambda_s * smooth_loss + (lambda_l2 * l2_loss)*0.5
-    return total_loss,[total_loss,main_loss,lambda_s *smooth_loss,lambda_l2 *l2_loss*0.5]
 
 class LossCalculator:
     def __init__(self, model=None,y_true=None,std=None,kernel=None,
@@ -222,17 +188,28 @@ class LossCalculator:
     def l2_regularization(self,weights=None):
         if weights is None:
             weights = self.model.trainable_weights
-        return self.l2_regularization(weights)
+        return tf.reduce_sum([tf.reduce_sum(tf.square(w)) for w in weights])
     
     def smoothness_loss(self,rho=None):
         if rho is None:
             rho=self.model(self.x)
-        return smoothness_loss(rho)
+        diff = rho[:, 1:] - rho[:, :-1]
+        return tf.reduce_sum(tf.square(diff))
     
     def custom_loss(self, y_pred,y_true=None):
         if y_true is None:
             y_true = self.y_true
-        return custom_loss(y_pred,self.y_true,self.std)
+
+        # Ensure both y_true and y_pred are of type float32
+        weighting = tf.cast(self.std, dtype=tf.float32)
+        weighting /= weighting.numpy()[0]
+        y_true = tf.cast(y_true, dtype=tf.float32)
+        y_pred = tf.cast(y_pred, dtype=tf.float32)
+
+        chi_squared = tf.square((y_true - y_pred) / weighting)
+        chi_squared = tf.reduce_mean(chi_squared)
+    
+        return chi_squared  # Chi-squared loss
 
     def total_loss(self,epoch,y_pred=None,rho=None,y_true=None):
         if rho is None:
@@ -242,9 +219,20 @@ class LossCalculator:
         if y_true is None:
             y_true = self.y_true
 
-        return total_loss(y_pred,y_true=y_true,std=self.std,
-                           rho=rho, model=self.model, lambda_s=self.get_lambda_s(epoch),
-                             lambda_l2=self.get_lambda_l2(epoch))
+        # Smoothness loss
+        smooth_loss = self.smoothness_loss(rho)
+        
+        # L2 loss (regularization on the network weights)
+        l2_loss = self.l2_regularization(self.model.trainable_weights)
+
+
+        #main_loss
+        main_loss = self.custom_loss(y_pred, y_true)
+        
+        # Total loss = main loss + smoothness regularizer + L2 regularization
+        total_loss = main_loss + self.get_lambda_s(epoch) * smooth_loss + (self.get_lambda_l2(epoch) * l2_loss)*0.5
+        return total_loss,[total_loss,main_loss,self.get_lambda_s(epoch) *smooth_loss,self.get_lambda_l2(epoch) *l2_loss*0.5]
+
     
 
 # Interface and runner classes
