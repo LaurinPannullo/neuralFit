@@ -11,16 +11,7 @@ import pprint
 import os
 
 
-
-# Helper functions
-
-
-
-
-
-# correlator classes and functions
-# partially former content of correlator.py
-
+# Define the kernel functions
 
 def KL_kernel_Momentum(Momentum, Omega):
     Momentum = Momentum[:, np.newaxis]  # Reshape Momentum as column to allow broadcasting
@@ -73,9 +64,6 @@ def Di(KL, rhoi, delomega):
     return dis
 
 
-
-# neural network classes
-# former content of models.py
 
 class SpectralNN(tf.keras.Model):
     def __init__(self, num_output_nodes, width=[32]):
@@ -151,11 +139,6 @@ class networkTrainer:
             end_time = time.time()
             print(f'Training took {end_time-start_time:.2f} seconds')
         return losses,individual_losses_history
-
-# loss calculator classes and functions
-# partially former content of lossCalculator.py
-
-
 
 class LossCalculator:
     def __init__(self, model=None,y_true=None,std=None,kernel=None,
