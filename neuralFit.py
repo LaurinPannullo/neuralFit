@@ -571,8 +571,9 @@ class FitRunner:
         return error
     
     def save_results(self, mean,error,samples,loss_history,extractedQuantity="RhoOverOmega"):
-        header ="Omega "+self.extractedQuantity+"_mean "+self.extractedQuantity+"_error"
+        header ="Omega "+self.extractedQuantity+"_mean"
         if samples is not None and error is not None:
+            header += f" {self.extractedQuantity}_error"
             for i in range(len(samples)):
                 header += f" {self.extractedQuantity}_sample_{i}"
             writeData = np.column_stack((self.omega,mean,error,samples.T))
