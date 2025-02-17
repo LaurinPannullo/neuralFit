@@ -318,9 +318,7 @@ class ParameterHandler:
         self.params = paramsDefaultDict
 
     def load_from_json(self, config_path: str) -> None:
-        if config_path == "":
-            return
-        else:
+        if config_path:
             with open(config_path, 'r') as f:
                 data = json.load(f)
             for name in self.allowed_params:
@@ -337,7 +335,7 @@ class ParameterHandler:
         for name in self.allowed_params:
             if name == "outputFile" and self.params[name] is None:
                 continue
-            elif name not in self.params or self.params[name] is None:
+            if name not in self.params or self.params[name] is None:
                 raise ValueError(f"Parameter '{name}' is not set.")
 
     def load_params(self, config_path: str, args: argparse.Namespace) -> None:
@@ -376,19 +374,18 @@ class ParameterHandler:
         correlator_cols = self.params["correlatorCols"]
         if isinstance(correlator_cols, list):
             return correlator_cols
-        elif isinstance(correlator_cols, int):
+        if isinstance(correlator_cols, int):
             return [correlator_cols]
-        elif isinstance(correlator_cols, str) and ':' in correlator_cols:
+        if isinstance(correlator_cols, str) and ':' in correlator_cols:
             start_str, end_str = correlator_cols.split(':')
             start = int(start_str) if start_str else None
             end = int(end_str) if end_str else None
             return list(range(start if start is not None else 0, end + 1 if end is not None else len(np.loadtxt(self.params["correlatorFile"], max_rows=1))))
-        elif isinstance(correlator_cols, str) and correlator_cols.isdigit():
+        if isinstance(correlator_cols, str) and correlator_cols.isdigit():
             return [int(correlator_cols)]
-        elif (isinstance(correlator_cols, str) and correlator_cols == '') or correlator_cols is None:
+        if not correlator_cols:
             return []
-        else:
-            raise ValueError("correlator_cols must be an integer index, list of indices, or a string with a range (e.g., '6:10', '6:', ':10', ':').")
+        raise ValueError("correlator_cols must be an integer index, list of indices, or a string with a range (e.g., '6:10', '6:', ':10', ':').")
 class FitRunner:
     def __init__(self, parameterHandler: ParameterHandler):
         self.parameterHandler = parameterHandler
